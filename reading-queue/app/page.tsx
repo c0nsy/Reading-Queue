@@ -1,3 +1,5 @@
+import { ThemeProvider } from "./components/providers/ThemeProvider";
+import { ThemeButton } from "./components/ThemeButton";
 import { ArticleAction } from "./types/Action";
 
 export default function Home() {
@@ -29,6 +31,16 @@ export default function Home() {
     }
   }
   return (
-   <></>
+    // wrap this in our themeprovider
+    //  we will use the useContext hook to get the theme and apply it to our components
+   <>
+    <ThemeProvider>
+      <div>
+        <h1>Welcome to the Reading Queue</h1>
+        {/* change the theme */}
+        <ThemeButton />
+      </div>
+    </ThemeProvider>
+   </>
   );
 }

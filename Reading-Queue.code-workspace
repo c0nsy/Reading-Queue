@@ -1,0 +1,16 @@
+{
+  "folders": [
+    {
+      "name": "Reading-Queue (docs + spec)",
+      "path": "."
+    },
+    {
+      "name": "reading-queue (Next app)",
+      "path": "reading-queue"
+    }
+  ],
+  "settings": {
+    "typescript.tsdk": "reading-queue/node_modules/typescript/lib",
+    "typescript.enablePromptUseWorkspaceTsdk": true
+  }
+}
