@@ -1,5 +1,4 @@
 import { ThemeProvider } from "./components/providers/ThemeProvider";
-import { SetOnly } from "./components/SetOnly";
 import { ThemeButton } from "./components/ThemeButton";
 // import { ArticleAction } from "./types/Action";
 
@@ -25,7 +24,7 @@ export default function Home() {
   //       // Handle tags action
   //       console.log(`Filtering by tags: ${action.tags.join(", ")}`);
   //       break;
-  
+
   //     default:
   //        // satifies never
   //       assertUnreachable(action);
@@ -34,15 +33,14 @@ export default function Home() {
   return (
     // wrap this in our themeprovider
     //  we will use the useContext hook to get the theme and apply it to our components
-   <>
-    <ThemeProvider>
-      <div>
-        <h1>Welcome to the Reading Queue</h1>
-        {/* change the theme */}
-        <ThemeButton />
-        <SetOnly />
-      </div>
-    </ThemeProvider>
-   </>
+    <>
+      <ThemeProvider>
+        <div>
+          <h1>Welcome to the Reading Queue</h1>
+          {/* change the theme */}
+          <ThemeButton />
+        </div>
+      </ThemeProvider>
+    </>
   );
 }
