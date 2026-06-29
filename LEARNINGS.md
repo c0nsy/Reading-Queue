@@ -135,6 +135,27 @@ that compares by identity (a context value, a `memo`'d child's prop, another hoo
 provider/parent re-renders for unrelated reasons. If the value is a **primitive** or already
 **stable**, I don't need it — *that's* why Task 4 ended with the memos deleted.
 
+## `useReducer`
+
+- **What:** manage related state through a **pure function** `(state, action) => newState`, updated by
+  **dispatching actions** instead of calling setters directly.
+- **When:** several state values that change **together**, atomic multi-field updates, or the next
+  state depends on the previous. **Not** for a single independent primitive — that's `useState`.
+- **How:** `const [state, dispatch] = useReducer(reducer, initialState)`. You call `dispatch(action)`;
+  React then calls `reducer(currentState, action)` **for you**; the returned object becomes the new
+  state → re-render.
+- **Vocabulary (the part I kept not having words for):**
+  - **action** = an object literal describing *what happened*: `{ type, ...payload }`. `type` is the
+    **discriminant** (picks the `switch` case); the other fields are the **payload** (the data).
+  - **reducer** = the pure function. No mutation, no side effects. Returns a **new** object:
+    `{ ...state, field: action.x }` — copy everything, override one field. **PATCH, not PUT.**
+  - **dispatch** = the "mail slot." I drop an action in; I **never call the reducer myself.**
+- **Why over four `useState`s:** one central place for all transitions; atomic multi-field updates
+  (one "reset" action vs four setters); pure → testable with zero UI; scales as fields grow.
+- **Gotchas:** state holds **values**, not action objects. Initial state must be **complete** (every
+  required field). Put the `never` exhaustiveness check in `default`. The pure reducer file should
+  **not** import `useReducer` — that hook is called in the *component*, not the reducer.
+
 ## `useEffect` — sync state to an external system
 
 - **What:** run a side effect *after* render to keep an **external** system in sync with React state.
@@ -216,6 +237,17 @@ my checklist.
   literal values.** (`type: "sort"` vs `type: "search"`.)
 - Got `Argument of type 'X' is not assignable to parameter of type 'never'` and panicked — that
   error is the exhaustiveness check **working**: a member reached `default` un-handled.
+
+**`never` has TWO jobs in this pattern (Task 6 made this click):**
+- **As the parameter** `assertUnreachable(x: never)` — proves *exhaustiveness*. If I forget a case,
+  the leftover action isn't `never` and won't fit the param → compile error.
+- **As the return type** `assertUnreachable(...): never` — tells the compiler the function **never
+  returns / terminates control flow.** If I type it `: void` instead, the compiler thinks control
+  *continues past the call*, falls through to the end of the reducer, and implicitly returns
+  `undefined` → *"Function lacks ending return statement."* The fix is `void → never`. The compiler
+  doesn't know it throws (that's a runtime fact); `never` is how I *tell* it "execution stops here."
+- **The distinction to keep straight:** `void` = "returns normally, no useful value (control
+  continues)"; `never` = "does not return at all (control does **not** continue)."
 
 **Why not `enum`?** String-literal unions are simpler, have zero runtime footprint (enums emit JS
 objects), serialize cleanly, and play perfectly with discriminated unions. Reached for them on
@@ -315,6 +347,82 @@ subtree (not a global). `value={}` to compute, `value=''` for a literal string."
 - *"Primitives don't need `useMemo`; objects do — so prefer primitives."*
 - *"Break it, SEE it, then fix it. The `console.log` is truth, the highlight boxes lie."*
 - *"Consumer stuck on the default value = I forgot the Provider."*
+
+---
+
+## Task 5 — Compose providers without a pyramid
+
+**Concept:** As providers pile up (theme, query cache, app-state…), naive root nesting becomes a
+"pyramid of doom." Fix: extract **one** `'use client'` `Providers` component that takes `children` and
+nests all providers inside it, then mount it **once in `layout`** (not `page`) so it's app-wide. No
+third-party library — composing providers is just a component. Reaching for a "combine providers"
+helper before you have enough providers is **premature abstraction** (same sin as premature
+optimization).
+
+**Mistakes:**
+- `function Provider(children: ReactNode)` — took `children` as a **positional parameter**. A React
+  component receives **one `props` object**; `children` is a **property** of it. Must destructure:
+  `({ children }: { children: ReactNode })`. (The error was the cryptic *"... not assignable to
+  `ReactPortal` … missing type, props, key"* — that's TS trying to match my `{children}` object
+  against `ReactNode`'s portal shape because I'd typed the *whole props* as `ReactNode`.)
+- Named it `Provider` (singular) — reads like a single context provider; `Providers`/`AppProviders`
+  signals "stack of providers."
+
+**How to remember:** *"A component gets ONE props object; `children` lives inside it."* And:
+*"Moving providers to `layout` is a real win (all routes get them); extracting the nesting into a
+component is organizational. Provider **order** only matters when one provider consumes another."*
+
+---
+
+## Task 6 — Toolbar state with `useReducer`
+
+**Concept:** One reducer manages the toolbar's four related fields (search / sort / status / tags).
+The reducer is **pure** `(state, action) => newState`, building a new state immutably
+(`{ ...state, field }`). Actions are object literals describing events; `dispatch` sends them; React
+runs the reducer. (See the `useReducer` cheat-sheet card for the full vocabulary.)
+
+**The distinctions that cost me the most time:**
+- **STATE ≠ ACTIONS.** State holds the *current values*; actions describe *events*. I first stored
+  the **action objects** as state (`search: ActionSearch`) — wrong. State fields are **value types**
+  (`search: string`, `sort: ActionSort["sortBy"]` via indexed-access — DRY, derives from the action).
+- **"all" is a FILTER value, not an article status.** I "fixed" a missing-`"all"` error by adding
+  `"all"` to `ArticleStatus` — which then lets a real `Article` be `"all"` (nonsense). Keep the
+  domain type clean (3 real states); type the **filter** fields `ArticleStatus | "all"`. **Different
+  needs → different types** (same lesson as state-vs-action).
+- **Types don't go on values inside an object literal.** I wrote `status: "all": SomeType` trying to
+  annotate a value. There's no such syntax — the type lives on the **variable/field/interface**, and
+  whether `"all"` is allowed is decided *there*, not at the usage site. (Value-space vs type-space,
+  again.)
+- **Initial state must be COMPLETE.** A TS object literal must satisfy *every required* field — I
+  passed `{ search: }` and got "missing sort, status, tags."
+
+**How to remember:**
+- *"action = a described event (`type` picks the case, payload carries data); `dispatch` = the mail
+  slot; reducer = the one pure function; state = current values."*
+- *"State stores values, not the actions that produced them."*
+- *"An article's status is what it IS; a filter's status is what I'm SHOWING — `'all'` belongs only
+  to the filter."*
+- *"A type never goes on a value inside `{ }` — it goes on the variable/field the object flows into."*
+
+---
+
+## Smells → reach-for-this (the "when do I use X" table I keep asking about)
+
+> The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
+> (`useState`, plain props, compute-in-render) and let the pain *pull* you to the heavier tool. If I
+> can't state the problem a tool solves in one sentence, I don't need it yet. Feel the wrong way once
+> (Task 4 literally made me) — felt pain beats memorized rules.
+
+| Smell (the pain I'm feeling) | Reach for | Why |
+|---|---|---|
+| Threading the same prop through 3+ layers that don't use it | **Context** | Broadcast to the subtree; kills prop drilling |
+| Several state values that **change together** / atomic multi-field updates / next state depends on prev | **`useReducer`** | One pure place for all transitions; atomic; testable |
+| A new object/array/function identity **every render** causing wasted re-renders downstream | **pass a primitive / stable value, or `useMemo`/`useCallback`, or split context** | Stabilize identity so `===` checks pass |
+| A **dispatch-only** consumer re-rendering when unrelated state changes | **split state & dispatch into two contexts** | Isolate the thing that changes from the thing that doesn't |
+| Need to sync React state to a **non-React** system (DOM, subscription, timer) | **`useEffect`** | After-render side effect; the legit use of effects |
+| A value can be **computed from** props/state | **just compute it in render** (NOT `useEffect` + state) | Derived data isn't state; storing it invites drift |
+| One independent primitive (a boolean, a string) | **`useState`** | Don't over-reduce; simplest tool that works |
+| "Can this value be X?" depends on *whose* value it is (article vs filter) | **separate types** | Different needs → different types; don't pollute the domain type |
 
 ---
 

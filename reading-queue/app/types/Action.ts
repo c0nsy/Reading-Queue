@@ -1,20 +1,20 @@
 import { ArticleStatus } from "./Article";
-interface ActionSort {
+export interface ActionSort {
   sortBy: "date" | "title" | "status";
   type: "sort";
 }
 
-interface ActionSearch {
+export interface ActionSearch {
   query: string;
   type: "search";
 }
 
-interface ActionStatusFilter {
-  status: ArticleStatus;
+export interface ActionStatusFilter {
+  status: ArticleStatus | "all";
   type: "status";
 }
 
-interface ActionTags {
+export interface ActionTags {
   tags: string[];
   type: "tags";
 }
