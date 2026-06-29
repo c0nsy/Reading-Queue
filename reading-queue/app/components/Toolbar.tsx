@@ -2,7 +2,6 @@
 import { useReducer } from "react";
 import { toolbarReducer } from "../reducers/toolbarReducer";
 export function Toolbar() {
-  // our object has to have, search string, sort order, status filter, selected tags
   const [state, dispatch] = useReducer(toolbarReducer, {
     search: "",
     sort: "date",
