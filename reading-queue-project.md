@@ -151,13 +151,13 @@ No copy-pasting code you don't understand. If you can't re-derive it tomorrow, y
 ---
 
 ### Task 5 — Compose providers without building a pyramid  `[provider composition]`
-**Goal:** You now need at least: ThemeProvider, a QueryClientProvider (Task 7), and possibly your own app-state provider. Wire them up without an 8-deep nesting pyramid.
+**Goal:** You now need at least: ThemeProvider, your own article-cache provider (Task 7), and possibly your own app-state provider. Wire them up without an 8-deep nesting pyramid.
 
-**Google starting points:** "react provider hell", "compose react providers", "tanstack query QueryClientProvider setup".
+**Google starting points:** "react provider hell", "compose react providers", "react context provider composition".
 
 **Prove you understand:**
 - Why does provider *order* sometimes matter and sometimes not? Give an example of each.
-- What's the difference between a library provider (`QueryClientProvider`) and the one you wrote in Task 3 — and what's the same?
+- Your Task 7 cache provider and your Task 3 ThemeProvider are *both hand-written* — what's structurally different about what they hold (a simple sync value vs. an async, refetchable cache), and what's the same?
 - Is flattening the pyramid a real improvement or just cosmetic? Defend your answer.
 
 **Trap:** Reaching for a "combine providers" abstraction before you have enough providers to justify it. Premature abstraction is the same sin as premature optimization. How many providers is "enough"?
@@ -184,24 +184,24 @@ No copy-pasting code you don't understand. If you can't re-derive it tomorrow, y
 
 ---
 
-### Task 7 — Server state with TanStack Query  `[server vs client state]`
-**Goal:** Fetch and cache the article list. When the user pastes a URL, fetch its metadata. (Fake the backend — a local JSON file, MSW mock, or a tiny Express route. Your call; justify it.)
+### Task 7 — Server state, hand-rolled (no data library)  `[server vs client state]`
+**Goal:** Fetch and cache the article list **yourself** — no TanStack Query, no SWR. When the user pastes a URL, fetch its metadata. (Fake the backend — a local JSON file, an in-memory module, or a tiny route. Your call; justify it.) You are deliberately building, by hand, the thing a query library would hand you — so you understand exactly what it does and what it costs.
 
-**Google starting points:** "tanstack query useQuery", "tanstack query useMutation", "why server state is different from client state", "react query cache invalidation".
+**Google starting points:** "react fetch in useEffect cleanup", "why server state is different from client state", "stale-while-revalidate caching", "what does react-query do internally", "cache invalidation strategies".
 
 **Prove you understand:**
-- Name three things TanStack Query gives you that a hand-rolled `useEffect` + `useState` fetch does not.
-- What is the query *key* and why does it matter?
-- Why is it a *category error* to put server data in `useState` or context? What goes wrong over time?
+- Name three things a query library gives you that your hand-rolled `useEffect` + `useState` fetch does *not* — i.e. exactly what you're now on the hook to build (or consciously skip).
+- Where does your cached list physically live so that two components share *one* fetch instead of two? (This is why Task 5 mentions a cache provider.)
+- Why is it still a *category error* to treat server data like your `toolbar` state? What drifts over time, and who owns the truth?
 
-**Trap:** Reaching for `useEffect` to fetch. In 2026, fetching-in-useEffect is the thing you're learning to *stop* doing by default. If you write a `useEffect` with a fetch in it here, you owe yourself a written justification for why the query library couldn't do it.
+**Trap:** Building a fetch that "works" on the happy path while quietly ignoring the hard parts — dedup, loading/error, staleness, refetch-without-flashing-empty. The whole point of hand-rolling is to *feel* those. If your version skips one, name it out loud as a known gap; don't pretend it isn't there. (And if at the end you decide a library was worth it after all — that conclusion, *earned*, is a valid outcome.)
 
-**Done when:** Article list loads from the cache, shows loading and error states you didn't manually wire with booleans, and a refetch doesn't flash empty.
+**Done when:** The article list loads from your own cache, shows loading and error states, two components reading it trigger one fetch not two, a refetch doesn't flash empty — and you can point at each piece and say what a library would have done for you there.
 
 ---
 
 ### Task 8 — Extract a custom hook  `[custom hooks]`
-**Goal:** Wrap the query + the filter/sort/search logic into `useArticles(filters)` so components consume a clean interface.
+**Goal:** Wrap the fetch/cache + the filter/sort/search logic into `useArticles(filters)` so components consume a clean interface.
 
 **Google starting points:** "react custom hooks rules", "rules of hooks", "deriving filtered data react".
 
@@ -292,7 +292,7 @@ No copy-pasting code you don't understand. If you can't re-derive it tomorrow, y
 **Prove you understand:**
 - What "lie" is the UI telling, and how does it get reconciled with the truth?
 - What has to happen on failure, and where does the rollback logic live?
-- TanStack Query and `useOptimistic` both do optimistic updates — when would you use which?
+- `useOptimistic` is built into React 19 (not a third-party lib) — what does it give you over hand-rolling the optimistic-update-then-rollback dance in your own cache?
 
 **Trap:** Optimistically updating but forgetting the rollback path, so a failed request leaves the UI permanently wrong. Force a failure and prove it recovers.
 
@@ -324,9 +324,9 @@ No copy-pasting code you don't understand. If you can't re-derive it tomorrow, y
 **Prove you understand:**
 - Draw the timeline of the bug. *When* exactly does A clobber B?
 - Two fixes exist: aborting the stale request, and ignoring the stale response. What's the difference, and is one strictly better?
-- If you're using TanStack Query, does it already handle this? (Find out. Don't assume either way.)
+- You hand-rolled the fetch (Task 7), so no library is catching this for you — the fix is yours to wire. Which of the two fixes fits your cache layer cleanly?
 
-**Trap:** Assuming the query library saves you without checking, OR adding an `AbortController` you never actually wire to anything. Reproduce the race *first* — make it fail visibly — then fix it.
+**Trap:** Adding an `AbortController` you never actually wire to anything, or "handling" the race without first reproducing it. Reproduce the race *first* — make it fail visibly — then fix it.
 
 **Done when:** You can reproduce the race on demand, and your fix makes the last-submitted URL always win.
 
@@ -335,7 +335,7 @@ No copy-pasting code you don't understand. If you can't re-derive it tomorrow, y
 ### Task 16 — Error boundaries + lazy reader view  `[error boundaries + React.lazy/Suspense]`
 **Goal:** Wrap the metadata flow in an error boundary so a bad URL can't white-screen the app. Code-split the full-article "reader" view so it loads on demand.
 
-**Google starting points:** "react error boundary", "react-error-boundary library", "react lazy suspense", "react code splitting route".
+**Google starting points:** "react error boundary" (hand-roll the class component — boundaries can't be hooks), "react lazy suspense", "react code splitting route".
 
 **Prove you understand:**
 - Why can't a regular component (or a hook) catch a render error — why does it have to be a boundary? What kind of errors do boundaries NOT catch?
