@@ -2,15 +2,14 @@
 
 import { ThemeButton } from "./components/ThemeButton";
 import { Toolbar } from "./components/Toolbar";
-import { useFetchArticles } from "./hooks/useArticles";
 import { Loading } from "./components/Loading";
 import { ArticleCard } from "./components/ArticleCard";
 import { ErrorMessage } from "./components/ErrorMessage";
+import { useContext } from "react";
+import { ArticleContext } from "./components/providers/ArticleProvider";
 
 export default function Home() {
-  const { articles, isLoading, error } = useFetchArticles(
-    "http://localhost:3000/api/articles",
-  );
+  const { articles, isLoading, error } = useContext(ArticleContext);
   return (
     <>
       <main className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-12">
@@ -25,7 +24,7 @@ export default function Home() {
         <Loading loading={isLoading} />
         <ErrorMessage error={error} />
         <div className="flex flex-col gap-3">
-          {articles?.map((article) => (
+          {articles.map((article) => (
             <ArticleCard
               key={article.id}
               url={article.url}
