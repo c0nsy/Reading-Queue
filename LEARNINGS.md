@@ -160,8 +160,9 @@ provider/parent re-renders for unrelated reasons. If the value is a **primitive*
 
 - **What:** run a side effect *after* render to keep an **external** system in sync with React state.
 - **When:** the system is **not** React — toggling a DOM class (`.dark` on `<html>`), subscriptions,
-  timers, listeners. **Not** for deriving a value from props/state (do that in render), and **not**
-  the place to fetch server data (that's the anti-pattern — Task 7 uses TanStack Query instead).
+  timers, listeners. **Not** for deriving a value from props/state (do that in render). Fetching in an
+  effect is the classic anti-pattern — but for Task 7 I'm **hand-rolling** it on purpose (no data
+  library) to feel what a query lib does for me. See the *Fetching server state by hand* card.
 - **How:** `useEffect(fn, [deps])` re-runs when a dep changes; `[]` = once on mount; no array =
   every render. Same identity rules apply to the deps array.
 
@@ -187,6 +188,53 @@ provider/parent re-renders for unrelated reasons. If the value is a **primitive*
   component (hooks, state, handlers allowed).
 - A page can stay a Server Component and mount small **client islands** (like `ThemeProvider`) where
   interactivity is needed.
+
+## Custom hooks — extracting stateful logic
+
+- **What:** a function named `useX` that *calls other hooks* and returns whatever shape the caller
+  needs. It packages `useState`/`useEffect` so components don't repeat them.
+- **Two Rules of Hooks (and *why*):**
+  1. **Call hooks only at the top level** — never inside `useEffect`, a callback, a condition, or a
+     loop. React identifies each hook purely by **call order**, which must be identical every render.
+     Hiding a hook inside an effect/branch breaks that bookkeeping → "Invalid hook call."
+  2. **Call hooks only from React functions** (components or other hooks), not plain functions.
+- **Where it lives:** module scope / its own file (`app/hooks/`), **not** nested inside a component
+  (a hook defined inside a component is rebuilt every render and can't be reused).
+- **Consuming pattern:** call at the **top level**, **read the return directly** —
+  `const { data, isLoading, error } = useThing(arg)`. The hook **owns** that state.
+- **Gotchas I hit:** defined a hook but never *called* it (defining ≠ using); called it *inside*
+  `useEffect`; copied its return into a **second `useState`** (second source of truth) and called
+  `setX` **in the render body** → **infinite loop**. The hook already holds the state — just use it.
+
+## What React will (and won't) put on screen
+
+- **Visible:** **strings and numbers** only.
+- **Renders as nothing** (no error): `null`, `undefined`, `false`, `true`. A bare boolean
+  (`<h1>{loading}</h1>`) shows **empty** — booleans don't display.
+- **Throws** *"Objects are not valid as a React child"*: a plain object, an array of objects, an
+  **`Error` object**. To show an error, render a **string** off it (`error.message`), not the object.
+- **To show nothing on purpose, `return null`** — don't return an empty tag.
+- **Gotcha:** `error` typed `unknown` → narrow before `.message`:
+  `error instanceof Error ? error.message : String(error)`.
+
+## Fetching server state by hand (Task 7, no data library)
+
+- **Three phases of one fetch:** *pending* (loading) → *fulfilled* (data) → *rejected* (error).
+  One request = **one** `isLoading` + **one** `error` + the data. Model and render all three.
+- **`fetch` does NOT throw on `4xx`/`5xx`** — only on a *network* failure. A `500` still **resolves**
+  with `response.ok === false`. Check `if (!response.ok) throw …` **before** `.json()`, or the
+  `catch`/error state never fires.
+- **`response.json()` returns `any`** — the wire is untyped (where Zod would later go).
+- **Loading/error live where the async work happens** — at the list level, **not** per-card. A
+  presentational card does no async (and during loading there are *zero* cards anyway).
+- **StrictMode double-fires effects in dev** to expose effects that aren't safe to run twice — a
+  preview of Task 15's race/cleanup work. Don't disable it.
+- **Measuring:** a `console.log` in the component body counts **renders**, not **fetches**. Count
+  fetches in the **Network tab** (DevTools' `installHook.js` echoes aren't extra work).
+- **Next.js *is* the backend** — App Router **Route Handlers** (`app/api/.../route.ts`) serve JSON;
+  no Express. Same-origin → fetch a **relative** path (`/api/articles`); dev is **http**, not https.
+- **Still owed (what a library would give):** dedup / shared cache (two components → one fetch),
+  no-empty-flash on refetch. That's ③.
 
 ---
 
@@ -406,6 +454,56 @@ runs the reducer. (See the `useReducer` cheat-sheet card for the full vocabulary
 
 ---
 
+## Task 7 — Server state, hand-rolled (decision: no data library)
+
+**Decision:** Dropped TanStack Query — **hand-rolling** server state to learn what a query lib does
+internally. Traded "know the industry tool" for "understand the machine." (Updated `reading-queue-project.md`
+to match: Tasks 5/7/8/13/15/16 now hand-rolled.)
+
+**Concept — server state ≠ client state:** the difference isn't *mutability* (toolbar state changes
+constantly too). It's **ownership / source of truth.** `theme`/`toolbar` are *born and live in the
+browser* — the browser **is** the truth. The article list **lives on a server**; what I hold is a
+**cached copy** — *async to fetch, can fail, can go stale*, none of which `useState` models. (A desk
+note I authored vs. a shared Google Doc someone else can edit.)
+
+**Things that clicked:**
+- **Validation ≠ acceptance.** Zod makes a payload *well-formed*; it doesn't make the server *agree*.
+  The server owns fields I don't (`id`, `createdAt`, dedup rules) → my optimistic copy can drift even
+  with perfect validation. *Well-formed ≠ final truth.*
+- **Two mutation strategies:** refetch after a change (always correct, costs a round-trip) vs. patch
+  the local cache (instant, risks drift). Same copy-vs-truth tension, at write time.
+- **Metadata fetch is a different operation.** "Fetch the saved list" (on mount → `Article[]`) vs.
+  "look up a pasted URL's title/image" (on a user action, an *unsaved candidate* → a preview).
+  Different trigger/input/output → **different hook**, and it belongs to **Task 14**, not here.
+
+**Mistakes (this task's pattern: I keep reaching past the simple thing):**
+- **Re-made the Task-5 bug:** `ArticleCard(id, url, title, status)` — four **positional params**. A
+  component gets **one props object** → destructure. Error: *"Target signature provides too few
+  arguments. Expected 4, got 1"* (React calls components with **1** arg).
+- **Inverted the error gate:** `{!error && <ErrorMessage/>}` showed the error UI when there was **no**
+  error. Want `{error && …}` (or self-gate inside the component, `return null` when none).
+- **`<Error>`** = the global JS class, not my component. Never shadow built-ins → named it `ErrorMessage`.
+- **Tried to render non-renderables:** `<h1>{loading}</h1>` (boolean → blank), `{error}` (object →
+  crash). Render a **string**; `return null` for nothing. (See *What React will render* card.)
+- **Hook misuse:** called `useFetchArticles` **inside `useEffect`**; copied its return into a **second
+  `useState`** and called `setArticles` **in the render body** → infinite loop. The hook owns the
+  state — call at top level, read the return.
+- **Map returned nothing:** `(a) => { <Card/>; }` (block body, no `return`) → `undefined[]`. Use
+  `(a) => ( <Card/> )`. Every mapped child needs a **`key`** (`key={article.id}`).
+- **Forgot `fetch` doesn't throw on `500`** → planned an error state that would never fire without
+  `if (!response.ok) throw`.
+- **`https://localhost`** (dev is **http**) + hardcoded host → just `/api/articles`.
+
+**How to remember:**
+- *"Server state = a cached COPY of someone else's truth; client state = my own desk note."*
+- *"Components take ONE props object — always."* (The bug that keeps coming back.)
+- *"React shows strings & numbers; objects throw, booleans vanish; `return null` for nothing."*
+- *"`fetch` resolves on 500 — check `response.ok` or the error never fires."*
+- *"The hook owns its state — call it at the top, use the return; don't re-store it."*
+- *"Loading/error live where the async work is — one fetch, one loading, not per-card."*
+
+---
+
 ## Smells → reach-for-this (the "when do I use X" table I keep asking about)
 
 > The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
@@ -423,6 +521,8 @@ runs the reducer. (See the `useReducer` cheat-sheet card for the full vocabulary
 | A value can be **computed from** props/state | **just compute it in render** (NOT `useEffect` + state) | Derived data isn't state; storing it invites drift |
 | One independent primitive (a boolean, a string) | **`useState`** | Don't over-reduce; simplest tool that works |
 | "Can this value be X?" depends on *whose* value it is (article vs filter) | **separate types** | Different needs → different types; don't pollute the domain type |
+| Data that lives on a **server** (async, can fail, can go stale) | **a fetching hook / cache** (not `useState`/context as its *home*) | It's a *cached copy* of someone else's truth, not owned client state |
+| The same `useState`+`useEffect`/fetch logic repeated across components | **a custom hook (`useX`)** | Package it once; components call it and read the return |
 
 ---
 
