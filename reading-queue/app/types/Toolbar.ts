@@ -1,4 +1,5 @@
-import { ActionSort, ActionTags } from "./Action";
+import { Dispatch, SetStateAction } from "react";
+import { ActionSort, ActionTags, ArticleAction } from "./Action";
 import { ArticleStatus } from "./Article";
 
 export interface ToolbarState {
@@ -7,3 +8,5 @@ export interface ToolbarState {
   status: ArticleStatus | "all";
   tags: ActionTags["tags"];
 }
+
+export type ToolbarDispatch = Dispatch<ArticleAction>;

@@ -1,15 +1,15 @@
 "use client";
 
+import { useArticles } from "./hooks/useArticles";
+
 import { ThemeButton } from "./components/ThemeButton";
 import { Toolbar } from "./components/Toolbar";
 import { Loading } from "./components/Loading";
 import { ArticleCard } from "./components/ArticleCard";
 import { ErrorMessage } from "./components/ErrorMessage";
-import { useContext } from "react";
-import { ArticleContext } from "./components/providers/ArticleProvider";
 
 export default function Home() {
-  const { articles, isLoading, error } = useContext(ArticleContext);
+  const { articles, isLoading, error } = useArticles();
   return (
     <>
       <main className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-12">
