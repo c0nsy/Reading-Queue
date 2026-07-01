@@ -1,13 +1,12 @@
 "use client";
-import { useReducer } from "react";
-import { toolbarReducer } from "../reducers/toolbarReducer";
+import { useContext } from "react";
+import {
+  ToolbarDispatchContext,
+  ToolbarStateContext,
+} from "./providers/ToolbarProvider";
 export function Toolbar() {
-  const [state, dispatch] = useReducer(toolbarReducer, {
-    search: "",
-    sort: "date",
-    status: "all",
-    tags: [],
-  });
+  const dispatch = useContext(ToolbarDispatchContext);
+  const state = useContext(ToolbarStateContext);
   function handleSearch() {
     dispatch({ type: "search", query: "react" });
   }
@@ -15,7 +14,7 @@ export function Toolbar() {
     dispatch({ type: "sort", sortBy: "status" });
   }
   function handleStatus() {
-    dispatch({ type: "status", status: "unread" });
+    dispatch({ type: "status", status: "reading" });
   }
   function handleTags() {
     dispatch({ type: "tags", tags: ["tech", "finance"] });

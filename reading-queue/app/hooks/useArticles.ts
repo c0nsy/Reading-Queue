@@ -1,5 +1,38 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useContext } from "react";
 import { Article, UseArticlesReturn } from "../types/Article";
+import { ArticleContext } from "../components/providers/ArticleProvider";
+import { ToolbarStateContext } from "../components/providers/ToolbarProvider";
+
+export function useArticles(): UseArticlesReturn {
+  const { articles, isLoading, error } = useContext(ArticleContext);
+  const toolbarState = useContext(ToolbarStateContext);
+
+  const filteredArticles = articles
+    .filter(
+      (article) =>
+        toolbarState.status === "all" || article.status === toolbarState.status,
+    )
+    .filter(
+      (article) =>
+        toolbarState.search === "" ||
+        article.title.toLowerCase().includes(toolbarState.search.toLowerCase()),
+    )
+    .sort((a, b) => {
+      switch (toolbarState.sort) {
+        case "title":
+          return a.title.localeCompare(b.title);
+        case "status":
+          return a.status.localeCompare(b.status);
+        // we do nothing for date
+
+        default:
+          return 0;
+      }
+    });
+
+  return { articles: filteredArticles, isLoading, error };
+}
+
 export function useFetchArticles(): UseArticlesReturn {
   const [articles, setArticles] = useState<Article[]>([]);
   const [isLoading, setIsLoading] = useState(true);
