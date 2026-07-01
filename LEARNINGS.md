@@ -504,6 +504,90 @@ note I authored vs. a shared Google Doc someone else can edit.)
 
 ---
 
+## Task 8 — Extract a custom hook (`useArticles`) + derived filter/sort/search
+
+**Concept:** Wrap the filter/sort/search into a **consumer hook** `useArticles()` so components get a
+clean interface and `page.tsx` stays dumb. The filtered/sorted list is **derived state** — *computed
+in the render body every render* from `(articles + toolbarState)`, **never** stored in `useState`.
+To make the toolbar's reducer reachable by both the buttons and the filter logic, I lifted the Task-6
+`useReducer` out of `Toolbar` into a **`ToolbarProvider`** exposing it via **two split contexts**
+(the Task-4 pattern): `ToolbarDispatchContext` (buttons need only `dispatch`, which is stable → they
+shouldn't re-render on filter changes) + `ToolbarStateContext` (the filter logic + `<pre>` debug read
+state). The hook returns the **same `UseArticlesReturn` shape** as the raw context, so it's a
+**drop-in replacement** for `useContext(ArticleContext)` — consumers can't tell filtering happened.
+
+**The distinctions that cost me time:**
+- **Fetcher vs consumer are TWO hooks, not one.** `useFetchArticles` **populates** `ArticleContext`
+  (called once in the provider); `useArticles` **reads** it. I tried to bolt the context-read onto the
+  fetcher → circular (the thing that fills the context was trying to read it). Keep producer and
+  consumer separate.
+- **A reducer's `dispatch` is `Dispatch<ArticleAction>`** — the action union directly. **NOT**
+  `Dispatch<SetStateAction<ArticleAction>>` (that's the *`useState` setter* shape: "value or updater
+  fn"). A reducer takes an action, full stop — no updater form. Copying the `ThemeDispatch` shape was
+  the bug.
+- **`.filter` takes a PREDICATE (returns `boolean` — keep/drop); `.sort` takes a COMPARATOR (returns a
+  signed `number` — order).** Different jobs. Don't think "predicate" for sort.
+  - Comparator sign rule: **negative → a first, positive → b first, 0 → leave as-is.** Strings:
+    `a.title.localeCompare(b.title)` (handles casing/order, returns the sign for me). Numbers: `a - b`.
+  - **`.sort()` with no comparator is broken for objects** — it stringifies each to `"[object Object]"`
+    and sorts those. Always pass a comparator.
+  - **`.sort()` mutates in place** — safe here only because `.filter()` already returned a *fresh*
+    array. Sorting the raw context `articles` directly would mutate shared state.
+- **Derived, not stored.** Filtering *is* derived state (I first mislabeled it "not derived" while
+  describing it perfectly). Compute it inline; don't `useState`+`useEffect` it. A `useEffect` that
+  `setFiltered(...)` runs *after* the render commits → the screen paints one render **stale** (shows
+  the old list for a beat) + wastes a second render. Compute-in-render can't go stale.
+- **Don't memoize yet.** `useMemo` here would cache the filtered array between renders, but the list is
+  trivial (few hardcoded articles) → premature. It earns its place in **Task 11**, *after measuring*,
+  when the list is large or a `memo`'d child needs a stable array reference.
+
+**Mistakes (the "reach past the simple thing" pattern, again):**
+- **`createContext<ToolbarState>("")`** — gave a `string` default where a `ToolbarState` *object* is
+  required. Default must be a real object; pull the initial state into **one shared const** used for
+  both the context default *and* `useReducer`'s initial arg (don't hand-copy it twice).
+- **`toolbarState === "all"`** — compared the **whole state object** to a string (always false). Reach
+  into the field: `toolbarState.status`. (Same class of error: `switch (toolbarState)` with
+  `case toolbarState.sort` — switching on the whole object, `case`ing on a variable. Switch inspects
+  **one value**; `case`s are **literals** (`"title"`, `"status"`).)
+- **Typed the array as the box:** `const filtered: UseArticlesReturn = articles.filter(...)`. `.filter`
+  returns `Article[]`; `UseArticlesReturn` is `{articles, isLoading, error}`. The array is the *list*;
+  the hook returns a *box holding the list*. Put the return type on the **function signature**.
+- **`return { filteredArticles, ... }`** → *"filteredArticles does not exist in type
+  UseArticlesReturn."* Object shorthand `{ x }` = `{ x: x }` — the **key** is the variable name. The
+  contract wants key `articles`. Spell it out: **`{ articles: filteredArticles }`** — an object literal
+  maps *any key to any value*; shorthand is just sugar when they match.
+- **`let articles` + `articles = filteredArticles`** to force shorthand — made `articles` mean "raw
+  list" then "filtered list" in the same function (one name, two concepts). The explicit key map needs
+  no `let` and no reassignment. Prefer it.
+- **Inverted search guard:** `search != "" || title === search` → keeps everything when typing, filters
+  to empty-titles when blank. Mirror the status guard: **`search === ""`** ("empty → keep all"). And
+  exact `===` won't substring-match — use **`title.toLowerCase().includes(search.toLowerCase())`**
+  (lowercase **both** sides).
+- **Ternary branched on the wrong thing:** condition was a `localeCompare` result, both arms identical.
+  The condition must test the **sort mode** (`toolbarState.sort`); each branch is that field's compare.
+  Three modes > two ternary arms → used a `switch` with `default: 0` so `"date"` is a real no-op (no
+  `createdAt` field exists yet, so date can't sort).
+
+**Rules of hooks — what actually breaks (nailed at the gate):** React tracks hooks by **call order**,
+matching the nth call to the nth stored slot each render. Violate rule 1 (call inside a
+condition/loop/effect) and the order **shifts** → state bleeds from one `useState` into another,
+effects run stale, and React throws *"Rendered more/fewer hooks than during the previous render."*
+It is **not** a "flicker." Rule 2 (call only from React functions): a plain function isn't in the
+render tree, so there's **no component instance for React to attach the state to** → runtime error.
+
+**How to remember:**
+- *"Producer fills the context, consumer reads it — two hooks, never merge them."*
+- *"Reducer dispatch = `Dispatch<Action>`; `SetStateAction` is the useState-setter shape."*
+- *"`.filter` wants a predicate (boolean); `.sort` wants a comparator (signed number). No bare
+  `.sort()` on objects."*
+- *"Filtered list is DERIVED — compute in render, no useState. Stored derived data paints stale."*
+- *"`{ x }` makes the key `x`; to hit a different key, write `{ key: value }` in full."*
+- *"`switch` inspects ONE value; `case`s are LITERALS. Reach into `.field`, don't compare the whole
+  object."*
+- *"Hooks break by call-order → wrong slot / hook-count error, not a flicker."*
+
+---
+
 ## Smells → reach-for-this (the "when do I use X" table I keep asking about)
 
 > The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
