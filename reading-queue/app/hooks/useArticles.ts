@@ -1,4 +1,4 @@
-import { useState, useEffect, useContext } from "react";
+import { useState, useEffect, useContext, useDeferredValue } from "react";
 import { Article, UseArticlesReturn } from "../types/Article";
 import { ArticleContext } from "../components/providers/ArticleProvider";
 import { ToolbarStateContext } from "../components/providers/ToolbarProvider";
@@ -7,6 +7,8 @@ export function useArticles(): UseArticlesReturn {
   const { articles, isLoading, error } = useContext(ArticleContext);
   const toolbarState = useContext(ToolbarStateContext);
 
+  const deferredSearch = useDeferredValue(toolbarState.search);
+
   const filteredArticles = articles
     .filter(
       (article) =>
@@ -14,8 +16,8 @@ export function useArticles(): UseArticlesReturn {
     )
     .filter(
       (article) =>
-        toolbarState.search === "" ||
-        article.title.toLowerCase().includes(toolbarState.search.toLowerCase()),
+        deferredSearch === "" ||
+        article.title.toLowerCase().includes(deferredSearch.toLowerCase()),
     )
     .sort((a, b) => {
       switch (toolbarState.sort) {

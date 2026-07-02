@@ -588,6 +588,102 @@ render tree, so there's **no component instance for React to attach the state to
 
 ---
 
+## Task 9 — Keep search smooth under load (`useDeferredValue` + `memo`)
+
+**Concept:** With ~2,000 articles, typing in the search box janks (~150–200ms per keystroke,
+even worse under 4× CPU throttle). `useDeferredValue` returns a **lagging copy** of a value: on
+each keystroke React does **two** render passes — an **urgent** pass that returns the *old*
+deferred value (commits fast → the input stays responsive) and a **low-priority, interruptible**
+pass that returns the *new* value (discarded and restarted if a newer keystroke arrives). It
+doesn't remove the lag — it **relocates** it off the input (unacceptable to lag) onto the results
+list (acceptable to lag).
+
+**The two-move rule (this is the whole lesson):** `useDeferredValue` alone did **nothing** — it
+actually felt *worse* (two renders instead of one). Deferring is only half. The urgent pass only
+becomes cheap if the expensive downstream tree can **skip re-rendering** when the deferred value
+hasn't changed yet. So the pairing is always:
+1. **Defer the input value** (`const deferredSearch = useDeferredValue(toolbarState.search)`) and
+   feed the deferred copy into *only* the expensive consumer (the search predicate).
+2. **Memoize the expensive downstream component** (`export default memo(ArticleCard)`) so on the
+   urgent pass — where `deferredSearch` is stale and the card props are identical — all ~2,000
+   cards hit `memo`'s shallow prop check and **bail out**. Result: urgent commit cratered
+   **~200ms → ~56ms**, input keeps up with my fingers.
+   The React docs never show `useDeferredValue` without `memo` — for exactly this reason.
+
+**The distinctions that cost me time:**
+- **Defer the INPUT (primitive string), not the OUTPUT (computed list).** My first instinct was
+  `useDeferredValue(articles.filter(...).sort(...))`. Two problems: (a) it bundles the **status
+  filter and sort** into the deferral too, so changing a dropdown would also lag — but only
+  *search* should lag; (b) `.filter()` returns a **brand-new array every render**, and
+  `useDeferredValue` leans on identity (`Object.is`) to know when the lag "caught up" — a fresh
+  reference each time is never identity-equal, so it can't cleanly settle. Defer the smallest,
+  **stable primitive** the expensive work depends on. Status/sort keep reading live `toolbarState`.
+- **The input NEVER reads the deferred value.** `value={state.search}` stays on live state. Point
+  the input at `deferredSearch` and the *input itself* inherits the lag — the exact thing I'm fixing.
+- **The expensive thing is the RENDER, not the `.filter()`.** Filtering 2,000 objects is
+  sub-millisecond. The 200ms is React reconciling ~2,000 `ArticleCard`s. So the fix targets the
+  *rendering* of the list, not the filtering.
+- **Why `memo` actually bails here:** `ArticleCard`'s props (`url`, `title`, `status`) are all
+  **primitive strings** → shallow-compare by value → equal → skip. (Foreshadow Task 11: the day I
+  pass a card `onClick={() => …}` — a **new function every render** — `memo` breaks and needs
+  `useCallback`. `memo` only bails if *all* props are stable.)
+
+**The controlled input (first one in the project):** a controlled input has two wires forming a
+loop — `value` is **driven by state** (`state.search`), `onChange` **dispatches** the new value
+back. React is the single source of truth; the DOM input is just a mirror.
+
+**Mistakes:**
+- **Second source of truth:** added a local `const [input, setInput] = useState("")` to back the
+  input, mirroring it into `state.search` by hand. The reducer state *already* owns the search text
+  → two sources of truth, manually synced (the same derived-vs-stored smell from Task 7/8). Fix:
+  **no local `useState`** — `value={state.search}`, `onChange` dispatches `e.target.value` straight
+  through.
+- **"One behind" stale read:** `onChange={e => { setInput(e.target.value); handleSearch(input); }}`
+  — passed `input` (this render's captured value, *before* `setInput` takes effect) instead of
+  `e.target.value`. `setInput` schedules a re-render; it doesn't mutate the `const` in place. Typing
+  "rrr" dispatched "rr". **The fresh value is in the event** (`e.target.value`), not in state yet.
+- **Deferred the whole computed array** (see above) — wrong target; defer the primitive.
+- **Broke the export switching to `memo`:** changed `export function ArticleCard` →
+  `export default memo(ArticleCard)` — a **named → default** export flip. Any `import { ArticleCard }`
+  then resolves to `undefined` → *"Element type is invalid… got: undefined."* Match the import side
+  (default import, or keep it named via `export const ArticleCard = memo(function …)`).
+
+**The trade-off I accepted (the "Done when"):** the results list shows **momentarily stale** data
+(results for the previous query) for however long the expensive render takes, in exchange for an
+input that never lags. Separately, `memo` isn't free — every card runs a shallow prop compare each
+render + React holds the memoized output in memory; cheap here and **justified because I measured**,
+but Task 11 is where I learn memoizing blindly can cost more than it saves.
+
+**`useDeferredValue` vs debounce vs `useTransition` (gate answers):**
+- **vs 300ms debounce:** debounce is a **fixed timer** — "wait 300ms of silence, then run" — a
+  blunt clock that eats dead wait on fast machines and **throws away intermediate results** (never
+  see "reac", only "react" after a pause). The naive version delays the *state update itself*, so
+  the **input** lags too. `useDeferredValue` is **work-paced + interruptible**: no fixed delay, lag
+  = however long the render takes, self-tunes to the hardware, keeps the input responsive *by
+  construction* (it defers a downstream copy, never the source). Debounce answers *when* to run
+  (a guess); `useDeferredValue` answers *at what priority*. Debounce is for **I/O I want to throttle**
+  (fewer API calls) — this app fetches **once** then filters in memory, so there's no API to throttle.
+- **vs `useTransition`:** same urgent/deferred split, different handle. `useTransition` **wraps the
+  state update** (`startTransition(() => setX(…))`) — reach for it when **I own the `setState`/`dispatch`
+  call** and want an `isPending` flag (e.g. a spinner while the status dropdown re-sorts 2,000 items;
+  `startTransition` is interruptible too, so it handles spam-clicks). `useDeferredValue` **wraps a
+  value** — reach for it when I *don't* own the update (a prop / hook return / someone else's state).
+  For *search* specifically I want `useDeferredValue` even though I own the dispatch, because wrapping
+  the search dispatch in a transition would make the **input value** low-priority = laggy input.
+
+**How to remember:**
+- *"`useDeferredValue` doesn't kill lag — it RELOCATES it off the input onto the list."*
+- *"Defer + memo are PARTNERS: defer the value, memo the expensive tree so the urgent pass bails.
+  Defer alone did nothing (felt worse)."*
+- *"Defer the INPUT (stable primitive), not the OUTPUT (fresh array every render)."*
+- *"The input reads LIVE state; the expensive filter reads the DEFERRED copy. They stop sharing one value."*
+- *"Controlled input = value from state, onChange dispatches — no second `useState`. The fresh value
+  is in `e.target.value`, not in state yet."*
+- *"debounce = fixed timer (throttle I/O); `useDeferredValue` = work-paced priority (keep input snappy);
+  `useTransition` = same, but when I own the setState."*
+
+---
+
 ## Smells → reach-for-this (the "when do I use X" table I keep asking about)
 
 > The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
@@ -607,6 +703,9 @@ render tree, so there's **no component instance for React to attach the state to
 | "Can this value be X?" depends on *whose* value it is (article vs filter) | **separate types** | Different needs → different types; don't pollute the domain type |
 | Data that lives on a **server** (async, can fail, can go stale) | **a fetching hook / cache** (not `useState`/context as its *home*) | It's a *cached copy* of someone else's truth, not owned client state |
 | The same `useState`+`useEffect`/fetch logic repeated across components | **a custom hook (`useX`)** | Package it once; components call it and read the return |
+| A fast-updating input (typing) feels laggy because an **expensive render** (big list) is trapped in the same blocking render | **`useDeferredValue`(the input value) + `memo` the expensive tree** | Relocates lag off the input onto the results; memo lets the urgent pass bail. **Both, or neither works** |
+| I **own the `setState`/dispatch** and want a heavy update to not block + an `isPending` spinner | **`useTransition`** | Wraps the *update*; marks it low-priority, interruptible, gives pending state |
+| I want to **throttle I/O** (fewer API calls while typing) | **debounce** (fixed timer) | Different problem from render lag — delays *firing the request*, not rendering |
 
 ---
 
