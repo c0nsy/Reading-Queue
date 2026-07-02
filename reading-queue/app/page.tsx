@@ -5,7 +5,7 @@ import { useArticles } from "./hooks/useArticles";
 import { ThemeButton } from "./components/ThemeButton";
 import { Toolbar } from "./components/Toolbar";
 import { Loading } from "./components/Loading";
-import { ArticleCard } from "./components/ArticleCard";
+import ArticleCard from "./components/ArticleCard";
 import { ErrorMessage } from "./components/ErrorMessage";
 
 export default function Home() {
