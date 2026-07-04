@@ -778,6 +778,91 @@ type B" → **A is yours, B is the target.**
 
 ---
 
+## Task 11 — Memoize, but only after you measure (`React.memo` + `useCallback`, the cost of memoization)
+
+**The twist:** `ArticleCard` was *already* `memo`'d (Task 9), so the classic "list re-renders too much"
+bug didn't pre-exist — I had to **introduce** it to have something to measure. That's realistic: the
+regression is what happens the moment you add an interaction to a list item.
+
+**The experiment (measure → break → fix → re-measure):**
+1. **Baseline:** Profiler on "type one letter in search" → **~60ms**, cards stay dark (memo bailing on
+   stable primitive props). *No problem to fix yet.*
+2. **Introduce the feature:** added a status-toggle `<button>` to `ArticleCard` + an `onToggleStatus`
+   prop, passed **inline** from the parent's `.map`: `onToggleStatus={() => handleToggle(article.id)}`.
+3. **Measure the regression:** same interaction → **188ms**, *all* cards flashing. Profiler "why did this
+   render?" said **"props changed: onToggleStatus."** A silent 3× slowdown, no error, only findable with
+   the tool.
+4. **Fix + re-measure:** back to **~60ms**, cards dark again.
+
+**Root cause (say it precisely):** not the id — the **inline arrow created a new function *identity*
+every render.** `memo` compares props by identity (`Object.is`); a fresh function literal is never `===`
+the old one → the compare fails → all ~2,000 cards re-render. (Baking a different id per closure just made
+2,000 *distinct* new functions; even one shared inline handler would've been recreated each render.)
+
+**The fix is two moves, not one:**
+1. **Reshape so there's ONE handler, not 2,000 closures.** Move the id *out* of the parent's closure and
+   let the **card supply its own id**: parent defines a single `(id) => …`, passes the function itself
+   (`onToggleStatus={handleToggle}`), and the card calls `onToggleStatus(id)` from its own button (the
+   card needs `id` as a prop). The card's *internal* `() => onToggleStatus(id)` is fine — it's not an
+   incoming prop being compared, so it doesn't defeat memo.
+2. **Stabilize that one handler with `useCallback`.** `const handleToggle = useCallback((id) => …, [])`.
+   The **dependency array is mandatory** — `useCallback(fn)` with *no* second arg returns a new function
+   every render (does nothing). The array lists everything from component scope the body **reads** (props,
+   state, vars) — *not* its own parameters, *not* globals. This body reads nothing external → `[]`.
+
+**Mistakes hit:**
+- **`useCallback(fn)` with no deps array** — silently a no-op; memo stayed broken until `[]` was added.
+- **`onClick={onToggleStatus}`** (passing the handler directly) — React calls it with the **click event**,
+  so `id` received a `SyntheticEvent`, not the article id. Needed `onClick={() => onToggleStatus(id)}`.
+- **`props: ArticleCardProps | any`** — silenced the "prop doesn't exist" TS error by widening to `any`
+  (kills all type-checking). The right fix is to *add* the prop to the type. (`| any` = a smell, never a fix.)
+
+**The discipline (the real deliverable):**
+- **Profiler recipe:** enable *"Record why each component rendered"* + *"Highlight updates when components
+  render"* → reproduce the slow interaction → read *why* the hot components rendered → fix *that specific
+  reference* → **re-measure to confirm.** Never guess; the tool names the cause.
+- **Measure first.** Step 1 might tell me there's *nothing to fix* (it did — memo already held). Believing
+  the Profiler over my instinct **is** the lesson.
+- **These optimizations come in pairs:** `useCallback` is useless without a `memo`'d consumer, exactly like
+  `useDeferredValue` was useless without `memo` (Task 9). If I add `useCallback` and there's no memo'd child
+  or deps array on the other end, I'm cargo-culting.
+
+---
+
+## The four "performance" hooks I keep mixing up (`useMemo` / `useCallback` / `useDeferredValue` / `useTransition`)
+
+**Two families.** Don't lump them — they solve different pains:
+- **Reference-stability** (`useMemo`, `useCallback`): stop an identity from changing every render, so a
+  downstream **identity-checker** (a `memo`'d child's props, or a deps array) can bail/settle.
+- **Priority/concurrency** (`useDeferredValue`, `useTransition`): keep the UI responsive by letting an
+  **expensive render happen at low priority** while the urgent interaction (typing/clicking) stays snappy.
+
+**The universal rule for ALL four:** they only pay off when paired with `React.memo` on the expensive tree
+(or, for the stability pair, a deps array), **and only after you measured.** Added blindly, they're pure
+overhead (deps compare + memory) — often a net loss.
+
+| Hook | What it stabilizes / does | Reach for it when… | Needs partner | Tiny example |
+|---|---|---|---|---|
+| **`useMemo`** | Caches a **value** (object/array/expensive compute) → stable identity/result | An unstable object/array (or costly calc) feeds a `memo`'d child's props **or** a deps array | `memo` child / deps array | `const cfg = useMemo(() => ({a, b}), [a, b])` → `<MemoChild cfg={cfg} />` |
+| **`useCallback`** | Caches a **function's identity** across renders | A **handler** you pass to a `memo`'d child (or into a deps array) is recreated each render and defeats it | a `memo`'d child / deps array | `const onPick = useCallback((id) => …, [])` → `<MemoRow onPick={onPick} />` |
+| **`useDeferredValue`** | Returns a **lagging copy** of a value; urgent render uses the *old* one | A fast input feels laggy because an expensive tree renders in the same pass, and I **hold a value** (don't own the setState) | `memo` the expensive tree | `const dq = useDeferredValue(query)` → feed `dq` to the memo'd list only |
+| **`useTransition`** | Marks a **state update** low-priority + interruptible; gives `isPending` | An expensive update **I trigger** (setState/dispatch) blocks the UI and I want a pending flag | (memo helps) | `const [isPending, start] = useTransition(); start(() => setTab(next))` |
+
+**The two distinctions that actually separate them:**
+- **`useMemo` vs `useCallback`:** *value* vs *function*. Literally `useCallback(fn, d) === useMemo(() => fn, d)`.
+- **`useDeferredValue` vs `useTransition`:** I wrap a **value** vs I wrap the **update**. Use `useDeferredValue`
+  when I only have the value / don't own the setState (a prop, a hook return). Use `useTransition` when I
+  **own the setState/dispatch** and want `isPending`. (For search I chose `useDeferredValue` even though I
+  own the dispatch, because wrapping the search dispatch in a transition would make the **input value**
+  low-priority = laggy input.)
+
+**When NOT to reach for any of them:** no `memo`'d consumer and no deps array checking the identity → the
+memo hook does nothing but cost. `useCallback` on a prop to a **non-memo'd** child = the child re-renders
+anyway = wasted. Cheap calc + `useMemo` = paying deps-compare to save nothing. **Measure, then memoize the
+proven hotspot, then stop.**
+
+---
+
 ## Smells → reach-for-this (the "when do I use X" table I keep asking about)
 
 > The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
