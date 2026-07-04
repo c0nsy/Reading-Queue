@@ -684,6 +684,100 @@ but Task 11 is where I learn memoizing blindly can cost more than it saves.
 
 ---
 
+## Task 10 — Compound component for the tag filter (`<TagFilter><TagFilter.Option/></TagFilter>`)
+
+**Concept:** A **compound component** is a parent + sub-components that share state *implicitly* so the
+consumer never wires it up. `<TagFilter>` creates a **context**, reads the real state, and republishes a
+tiny interface; `<TagFilter.Option>` reads that context. The consumer writes plain JSX and the state just
+*flows* to wherever the Options land — no props threaded through, no config object.
+
+**The three moves that make it a compound component:**
+1. **Context is the sharing mechanism** — `createContext`, `TagFilter` wraps `children` in
+   `<Context.Provider value={…}>`, `Option` calls `useContext`. (NOT `React.Children.map`/`cloneElement`
+   — that's the trap: fragile, breaks the moment an Option isn't a direct child.)
+2. **Static-property attachment** — `TagFilter.Option = Option`. A function *is* an object, so you hang
+   the sub-component off it as a property. This is the plain-JS move that makes `<TagFilter.Option>`
+   resolve. TS allows this directly on a **function declaration** (would need `Object.assign`/explicit
+   type for an arrow-`const`).
+3. **One export carries the whole family** — `Option` needs **no `export`**. Consumers reach it as
+   `TagFilter.Option`, a property on the already-exported `TagFilter`. `export` only controls *import by
+   name across files*; the sub-component rides along on the parent object. Exporting it too is dead
+   surface that invites bypassing the compound API.
+
+**`TagFilter` is a translator/hub** sitting between two worlds: *below* it, dumb Options that only want
+`{ selectedTags, toggle }`; *beside* it, the complicated toolbar reducer (`state.tags` + `dispatch`,
+action types). Its whole job: **read the complicated world, republish a simple interface.** Every
+provider-style compound component does exactly this.
+
+**Publish a clean interface, not raw materials (Option A vs B):** the context value carries
+`{ selectedTags, toggle }` — a **`toggle(tag)` function that wraps `dispatch` inside `TagFilter`** — NOT
+`{ selectedTags, dispatch }`. Why B: with raw `dispatch`, every `Option` would have to know the action
+type (`{ type: "tags", tag }`) — coupling it to the reducer. With `toggle`, `Option` never knows
+`dispatch` or `"tags"` exist. That *hiding* is the acceptance bar: **a teammate composes it without
+reading the internals.**
+
+**Controlled vs uncontrolled (gate answer):** a *single* well-written compound component can be **both** —
+it branches on whether a `value` prop was passed, exactly like native `<input>` (`value` → parent owns it,
+controlled; `defaultValue`/nothing → component owns it via internal `useState`, uncontrolled). **This
+instance is controlled**, because `useArticles` reads the selected tags off `toolbarState` — so the
+selection *has* to live in the toolbar reducer, not a private `useState`. "It can't be both" was wrong;
+"this one is controlled" is right. Keep those two claims separate.
+
+**Context default = `null` + throw guard.** The default is used in exactly one case: a consumer with **no
+matching Provider above it**. For a sub-component that's *meaningless* without its parent (an `Option`
+outside `TagFilter` has no `selectedTags`, no `toggle`), default to `null` and, in the consumer,
+`if (ctx === null) throw new Error("… must be used inside <TagFilter>")`. Two payoffs: (a) misuse fails
+**loudly** instead of silently no-op'ing; (b) after the throw, TS **narrows** the type from
+`Value | null` → `Value`, so `.selectedTags`/`.toggle` read cleanly. **Heuristic:** *can a consumer do
+something correct with no provider? Yes → real default (e.g. theme `"light"`). No → `null` + throw.*
+
+**Domain type: `Tag` (union), not `Tags` (object).**
+- A tag is *one value from a fixed set* → a **union type alias**: `type Tag = "tech" | "finance" | …`.
+  Then an article that has several = `tags: Tag[]`, and `article.tags` is `["tech","finance"]` — plain
+  strings, no nesting.
+- **Mistake:** wrote `interface Tags { tags: "tech" | … }` — an object wrapper around the union. That made
+  `article.tags` an object and forced `article.tags.tags`. Root cause: reached for **`interface`, which can
+  *only* describe an object shape** — so it *forced* the wrapper. **A union needs `type`, never
+  `interface`.** (interface = object shape; type alias = any type, incl. unions.)
+
+**Reducer owns the toggle (plan B).** Toggling selection is a **state transition**, so it lives in the
+reducer, not the component. Action carries the **single clicked `tag`** (the reducer already has
+`state.tags` — it only lacks *which* tag was clicked). The `tags` case: `state.tags.includes(tag)` →
+remove via `state.tags.filter(t => t !== tag)`, else add via `[...state.tags, tag]` — **immutable**,
+return `{ ...state, tags: next }`. (Wrap the case in `{ }` — a bare `const` under `case` throws "lexical
+declaration in case block" and leaks scope to sibling cases.)
+
+**Mistakes (beyond the `Tag` type):**
+- **Duplicated the reducer's toggle logic into `Option`.** Wrote `const isSelected = includes ? filter :
+  push`. But `isSelected` is a **boolean** — just `selectedTags.includes(tag)`. The filter/add belongs in
+  the reducer (single source of truth); the Option only *asks* "am I in?" and calls `toggle(tag)` to
+  request the change. (`.push` would also mutate — double wrong.)
+- **Export/import mismatch chain:** dropped `export` off `TagFilter` (it *is* imported elsewhere, so it
+  still needs one) **and** imported it default (`import TagFilter`) when it's a named export. Named export
+  ↔ named import (`import { TagFilter }`) must agree on *both* sides.
+- **"children is missing" TS error:** `<Option tag="tech"></Option>` with nothing between the tags.
+  `children` is a **prop whose value is the content between the tags** — empty tags = no `children`. Fix:
+  `<Option tag="tech">Tech</Option>`. (This is the `tag`=identity / `children`=label split I designed for
+  consumer control.)
+
+**How to read a TS assignability error** (the reusable skill): template is
+`Property 'X' is missing in type <WHAT-YOU-GAVE> but required in type <WHAT'S-EXPECTED>.` — the first type
+literal is **what you passed** (TS infers it from your JSX props), the second is **the contract**. Diff
+them; the named property is in the contract but not your input. Same for "Type A is not assignable to
+type B" → **A is yours, B is the target.**
+
+**How to remember:**
+- *"Compound component = context to share + `Parent.Child = Child` to attach. Consumer writes JSX, state
+  flows via context. Never `Children.map`/`cloneElement`."*
+- *"Publish a `toggle`, not `dispatch` — hide the reducer so Options don't know the action type."*
+- *"Context default `null` + throw = loud failure AND type-narrowing. Real default only if it works with
+  no provider."*
+- *"A tag is a value → `type` union. `interface` = object shape only; it forces a junk wrapper."*
+- *"`children` is the stuff between the tags. Required `children` + empty tags = 'children is missing'."*
+- *"TS error: first type = what I gave, second = what's wanted. Diff them."*
+
+---
+
 ## Smells → reach-for-this (the "when do I use X" table I keep asking about)
 
 > The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
@@ -706,6 +800,9 @@ but Task 11 is where I learn memoizing blindly can cost more than it saves.
 | A fast-updating input (typing) feels laggy because an **expensive render** (big list) is trapped in the same blocking render | **`useDeferredValue`(the input value) + `memo` the expensive tree** | Relocates lag off the input onto the results; memo lets the urgent pass bail. **Both, or neither works** |
 | I **own the `setState`/dispatch** and want a heavy update to not block + an `isPending` spinner | **`useTransition`** | Wraps the *update*; marks it low-priority, interruptible, gives pending state |
 | I want to **throttle I/O** (fewer API calls while typing) | **debounce** (fixed timer) | Different problem from render lag — delays *firing the request*, not rendering |
+| A parent + related children that must **share state**, and I want the **consumer to control layout** | **compound component** (context + `Parent.Child = Child`) | Implicit state sharing via context; JSX reads like the UI tree; inverts layout control to the consumer |
+| A **sub-component is meaningless without its parent** (used outside its provider) | **context default `null` + `throw` in the consumer** | Loud failure over silent no-op; the throw also narrows `Value \| null` → `Value` for TS |
+| A value is **one option from a fixed set** | **`type` union alias** (NOT `interface`) | `interface` can only be an object shape → forces a junk wrapper; unions need `type` |
 
 ---
 

@@ -1,4 +1,5 @@
 import { ArticleStatus } from "./Article";
+import { Tag } from "./Tag";
 export interface ActionSort {
   sortBy: "date" | "title" | "status";
   type: "sort";
@@ -15,7 +16,7 @@ export interface ActionStatusFilter {
 }
 
 export interface ActionTags {
-  tags: string[];
+  tag: Tag;
   type: "tags";
 }
 
