@@ -54,6 +54,40 @@ A component re-renders when **one** of these happens:
 - **Gotcha:** the DevTools "highlight updates" boxes wrap DOM *regions* and overstate what
   rendered. **`console.log` at the top of a component is ground truth.**
 
+### Tracing a state → render flow (the grep recipe)
+
+When I want to answer *"when I do X, what re-renders and why?"* — trace it in this order, grepping my own
+code. Worked example: **click a tag → the article list updates.**
+
+- **① Who OWNS the state?** Grep `useReducer` / `useState`. State lives in the component that calls the
+  hook — *that* is what re-renders (not the component that calls `dispatch`).
+  → `ToolbarProvider.tsx` `const [state, dispatch] = useReducer(toolbarReducer, …)`.
+- **② Who can CHANGE it?** Grep `dispatch(` / the setter. Each hit is a *trigger* (fires the loop; doesn't
+  re-render itself).
+  → `TagFilter`'s `toggle` → `dispatch({type:"tags", tag})`.
+- **③ Does the reducer return a NEW object?** The re-render only commits because `Object.is(next, prev)`
+  is false. `return { ...state, tags: nextTags }` = fresh identity → render. (Mutate + return same object
+  = React bails, no render.) **The identity change is the trigger, not "adding to the array."**
+- **④ Where is it PUBLISHED?** Find `<Context.Provider value={state}>`.
+  → `ToolbarProvider.tsx` `<ToolbarStateContext.Provider value={state}>` — new state = new context value.
+- **⑤ Who CONSUMES it?** Grep `useContext(ThatContext)`. Every consumer *component* re-renders. (A **hook**
+  like `useArticles` doesn't re-render — the *component that calls it* does.) Dispatch-only consumers
+  (`useContext(ToolbarDispatchContext)`) sit still — `dispatch` is stable.
+  → `TagFilter` (reads `state.tags`), `Toolbar` (`<pre>` reads `state`), the list (via `useArticles`).
+- **⑥ Where's the DERIVED work?** The consumer that recomputes from the new state.
+  → `useArticles` re-runs `.filter().filter().filter().sort()` → new visible list.
+
+**How to intuit it for a component I haven't written yet — a component X re-renders ONLY if:**
+1. **X owns the changed state** (`useState`/`useReducer` lives in X), **or**
+2. **X reads a context** whose value identity changed (`useContext`), **or**
+3. **X's props changed** (by identity), **or**
+4. **X's parent re-rendered** and X isn't shielded (`memo`, or passed as stable `children`).
+
+If none hold, **X is an independent state island and sits still.** That's why a *toolbar* dispatch never
+touches `ThemeProvider` — different state, and renders flow **down, never up** (a child re-rendering can't
+re-render its parent). So to predict impact: *find what state the action changes (①–③), then ask which
+components own or subscribe to that specific state (⑤). Everything else is independent.*
+
 ## Referential equality (identity vs value)
 
 - Objects, arrays, and functions compare by **identity** (`===`): `{a:1} !== {a:1}`. A fresh literal
