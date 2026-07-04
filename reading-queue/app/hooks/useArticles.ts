@@ -19,6 +19,11 @@ export function useArticles(): UseArticlesReturn {
         deferredSearch === "" ||
         article.title.toLowerCase().includes(deferredSearch.toLowerCase()),
     )
+    .filter(
+      (article) =>
+        toolbarState.tags.length === 0 ||
+        article.tags.some((tag) => toolbarState.tags.includes(tag)),
+    )
     .sort((a, b) => {
       switch (toolbarState.sort) {
         case "title":

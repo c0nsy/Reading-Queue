@@ -15,8 +15,12 @@ export function toolbarReducer(
       return { ...state, sort: action.sortBy };
     case "status":
       return { ...state, status: action.status };
-    case "tags":
-      return { ...state, tags: action.tags };
+    case "tags": {
+      const nextTags = state.tags.includes(action.tag)
+        ? state.tags.filter((tag) => tag !== action.tag)
+        : [...state.tags, action.tag];
+      return { ...state, tags: nextTags };
+    }
     default:
       assertUnreachable(action);
   }
