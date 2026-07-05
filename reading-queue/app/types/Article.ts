@@ -1,4 +1,7 @@
+import { Dispatch } from "react";
+
 import { Tag } from "./Tag";
+import { Order } from "./Order";
 
 export interface Article {
   id: string;
@@ -15,3 +18,24 @@ export interface UseArticlesReturn {
 }
 
 export type ArticleStatus = "unread" | "reading" | "archived";
+
+export interface ArticleState {
+  order: Order;
+}
+
+export interface ArticleOrder {
+  type: "order";
+  sourceId: string;
+  targetId: string;
+}
+
+export interface ArticleContextValue extends ArticleState, UseArticlesReturn {}
+
+export type ArticleAction = ArticleOrder | ArticleSeed;
+
+export type ArticleDispatch = Dispatch<ArticleAction>;
+
+export interface ArticleSeed {
+  type: "seed";
+  order: Order;
+}
