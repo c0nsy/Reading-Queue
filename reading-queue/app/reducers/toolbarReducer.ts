@@ -1,12 +1,9 @@
-import { ArticleAction } from "../types/Action";
-import { ToolbarState } from "../types/Toolbar";
+import { ToolbarState, ToolbarAction } from "../types/Toolbar";
+import { assertUnreachable } from "../utils/unreachable";
 
-function assertUnreachable(x: never): never {
-  throw new Error(`Unexpected object: ${x}`);
-}
 export function toolbarReducer(
   state: ToolbarState,
-  action: ArticleAction,
+  action: ToolbarAction,
 ): ToolbarState {
   switch (action.type) {
     case "search":

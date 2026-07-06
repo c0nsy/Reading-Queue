@@ -19,9 +19,3 @@ export interface ActionTags {
   tag: Tag;
   type: "tags";
 }
-
-export type ArticleAction =
-  | ActionSort
-  | ActionSearch
-  | ActionStatusFilter
-  | ActionTags;

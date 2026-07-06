@@ -863,6 +863,140 @@ the old one → the compare fails → all ~2,000 cards re-render. (Baking a diff
 
 ---
 
+## Task 12 — Drag to reorder (`@dnd-kit/react`) — key semantics, order as client state, seed + project
+
+**Concept:** Reordering forces a clean split I'd been able to ignore: the server owns the *set* of
+articles (read-only), the client owns the **order**. The order is its own tiny piece of client state, it
+gets **seeded** from the server data once, and the list renders by **projecting** server content through
+that order. dnd-kit supplies the drag physics; I supply the keys, the order state, and the reorder logic.
+
+**Key semantics (the graded gate):**
+- **Never index-as-key on a reorderable list.** With index keys, React sees keys `0,1,2` still exist after
+  a move, so it **keeps each instance in its slot and hands it new data** — state (a `useRef`, an
+  uncontrolled input, a checkbox) **stays glued to the *position*, not the item.** The classic corruption.
+- **Stable UUID keys → React moves the instance.** On `[A,B,C] → [C,A,B]`, React sees key-C still exists
+  and **relocates that component instance** to the front; its state travels *with the item*. **Keys tell
+  React "identity, not position."**
+- The `key` goes on the **outermost element the `.map` returns.** When I wrapped `ArticleCard` in
+  `<Sortable>`, the key had to move to `<Sortable>` — a key on the inner child does nothing for list
+  reconciliation. (`key` is special; React consumes it — `Sortable` never sees it as a prop.)
+
+**Tool choice = scope argument, not popularity.** "dnd-kit is industry-standard / I've used it" is a
+*social* reason, not an engineering one (the contract rejects it). The justification that holds: dnd-kit
+**delegates the part that isn't the lesson** (pointer math, collision detection, keyboard a11y) and
+**keeps the part that is** (I still write the keys, own the ordered array, and compute the new order in
+`onDragEnd`). If it reordered my state *for* me, it'd rob the lesson — but it hands me a drag-end event and
+lets me own the state. That's a safe delegation.
+
+**Order model — `string[]` of ids, client-owned. NOT article objects.**
+- `type Order = string[]`. The **position in the array IS the order.** It stores *only identities*, because
+  that's all "the order" contains — everything else (title, url, status) is server content that already
+  lives in the fetch result.
+- Storing whole `Article` objects would be **derived-vs-stored** (bucket #2): a second copy of server data
+  that goes **stale** the moment the server changes, plus duplication. `string[]` of ids sidesteps both.
+- **Order lives on the *collection*, not the article.** An article doesn't know its position; the list
+  does. (When the error said "Property 'order' is missing," the fix was *the initial state's shape*, NOT
+  adding an `order` field to `Article` — that would put per-item position back on each object.)
+
+**State ≠ Action (the mental model I kept fighting):**
+- **State is the stored data; its shape is fixed.** `ArticleState = { order: Order }` — and it stays that
+  shape *no matter how many actions I add.* After create/delete/reorder all run, `state.order` is *always*
+  a `string[]`.
+- **Action is a transient message with a `type`; the *union* is what grows.** `ArticleAction = ArticleOrder
+  | ArticleCreate | …`. I kept trying to type `state.order` as an *action* (`ArticleOrder`) and to add a
+  `create:`/`delete:` *field* per action. Both wrong.
+- **The receipt that settled it — my own `ToolbarState`:** every field is *data* (`search: string`,
+  `sort: "date"|…`), and the actions live in a *separate union* (`ToolbarAction`). Toolbar does NOT do
+  `{ search: ActionSearch }`. Four actions, one fixed state shape. Same here.
+- Not every action needs its own state field: create/delete/reorder **all mutate the one `order` array**
+  (append id / remove id / rearrange). "Create" is a *verb* (an action), not a *noun* (a stored value).
+
+**`assertUnreachable` exhaustiveness needs a real union (2+ members).** A union-of-one (`type A = X`) isn't
+a union — it's just `X` — so the `default` branch **doesn't narrow to `never`**, and `assertUnreachable(x:
+never)` errors ("`X` not assignable to `never`"). Verified by isolating it (two-member union → clean;
+one-member → errors). So the guard is *premature* against one action; it starts working the instant the
+union genuinely has ≥2 members (e.g. once `seed` joins `order`). The exhaustiveness pattern is a tool *for
+unions*.
+
+**Context defaults + merging contexts:**
+- **The default value's TYPE is forced by the context type; write the smallest valid literal of `T`.**
+  `createContext<ArticleState>` needs an `ArticleState` = `{ order }`, so the empty default is `{ order:
+  [] }` — NOT `[]` (that's an array, not the object). (`T = string → ""`, `T = {count:number} →
+  {count:0}`.) The *content* (empty-`T` vs `null`+throw) is a separate judgment.
+- **Merged read-context type via `interface X extends A, B {}`.** Chose to merge server data + order into
+  one "read" context. Compose the value type by having an interface **extend both** `UseArticlesReturn` and
+  `ArticleState` (empty body) — the clean, senior move for two object interfaces (`&` intersection also
+  works; reach for it when the parts aren't plain interfaces). **Don't** jam the merged shape onto
+  `UseArticlesReturn` — that's the *fetch hook's* honest contract (it returns no `order`), and widening it
+  broke the hook.
+- **Merge vs split contexts:** combine things that change together, separate things that change
+  independently. Kept `dispatch` in its own context (it's referentially **stable**, so dispatch-only
+  consumers never re-render on state change — the Task 11 split-for-stability move).
+- **When I delete/merge a context, every *consumer* must follow.** Deleting the dead-looking
+  `ArticleContext` broke `useArticles`, which was still reading it — `tsc` caught it across files (the
+  value of a whole-project type-check). Redirect consumers to the new source.
+
+**Convert external types at the boundary (anti-corruption).** dnd-kit's ids are `UniqueIdentifier =
+string | number`; my domain is `string`. Do **not** widen `Order`/`ArticleState`/the action to
+`string | number` to appease the library — that infects the whole domain to handle numeric ids that never
+occur. Instead **coerce once at the seam** (`String(source.id)`) in the `onDragEnd` handler. Keep the core
+clean; reconcile foreign types where the two worlds touch.
+
+**Reducer owns the reorder transition (consistent with the tags toggle).** Action carries the **minimal
+delta** — `{ type:"order"; sourceId; targetId }` — not a pre-computed array. The reducer does the move:
+copy `order`, `indexOf` both ids, `splice` the source out and `splice` it back in at the target index
+(this matches `arrayMove` semantics). **Guard `-1`** (id not found → `indexOf` returns `-1`, and
+`splice(-1,1)` deletes the *last* element — silent corruption): if either index is `-1`, `return state`.
+Wrap the `case` body in `{ }` (lexical-declaration rule).
+
+**dnd-kit `@dnd-kit/react` wiring (v0.5 — different from legacy):**
+- `onDragEnd` is a **prop on `DragDropProvider`**, not a legacy top-level callback. (Or use the
+  `useDragDropMonitor({ onDragEnd })` hook from inside the provider.)
+- The event carries `event.operation.source` and `event.operation.target` (each an entity with `.id`),
+  plus `event.canceled`. **Both `source` and `target` can be `null`** — guard them *before* reading `.id`.
+- The handler can't be `dispatch` directly (it'd receive a `DragEndEvent`, not an `ArticleAction`); it
+  reads the ids off the event and *builds* the action. Guards: `canceled || !source || !target ||
+  source.id === target.id` → `return`.
+- **One `DragDropProvider` wraps the whole list.** I first put it *inside* the `.map` → a separate,
+  isolated drag context per item (nothing could reorder). It must wrap all the `<Sortable>`s so they share
+  one context (same "the hook needs its provider above it" lesson).
+- **Whole-card grab (CSS):** the draggable element needs `select-none` (so pressing text doesn't start a
+  selection) + `touch-none` + `cursor-grab`; and interactive children steal the gesture — set
+  `draggable={false}` on the `<a>` so its native link-drag doesn't hijack the pointer.
+
+**Seed client state from async server state — once.** `order` starts `[]`; nothing fills it until the
+fetch resolves. A `useEffect([articles])` dispatches a **`seed`** action with `articles.map(a => a.id)` —
+**guarded by `articles.length > 0 && state.order.length === 0`** so it runs exactly once and a refetch
+never clobbers a user's drag. (`articles &&` is not "loaded" — `[]` is truthy; check `.length`.) The seed
+value is the **ids**, not the articles (the "order = ids" wall, one more time).
+
+**Project — render *through* the order, don't map raw articles.** The list must map over **`order`** (the
+driver / sequence), using `articles.find(a => a.id === id)` as the **lookup table**, then
+`.filter(a => a !== undefined)` to drop the seam cases (id whose article was filtered out or deleted). I
+first mapped `articles` by mistake → `id` was an `Article`, so `a.id === id` errored ("string and Article
+have no overlap") — the tell that I had the driver wrong. This makes **drag order win over the toolbar
+sort** (accepted). Two permanent seams: id in `order` with no matching article (drop it); server article
+not yet in `order` (won't render until seeded/appended).
+
+**Perf reality (deferred, not solved):** ~2,000 `<Sortable>`s each register a draggable+droppable, and
+drag-start **measures every one** → a multi-second delay before a grab activates. No sensor tweak fixes
+measuring 2,000 nodes. Real fix is **virtualization/pagination** (render only what's on screen) — a later
+task; capped the rendered count for now and flagged it as a known limitation.
+
+**How to remember:**
+- *"Stable id key = React moves the instance (identity). Index key = state glued to the slot (position).
+  Key goes on the outermost mapped element."*
+- *"Order = `string[]` of ids, owned by the collection. Storing article objects = stale duplicate."*
+- *"State shape is fixed data; the action *union* is what grows. Toolbar proves it: fields are data,
+  actions are a separate union."*
+- *"`assertUnreachable`/`never` only narrows on a real (2+) union; a union-of-one errors."*
+- *"Merge context types with `interface X extends A, B {}`. Delete a context → every consumer must follow."*
+- *"Coerce foreign types at the boundary (`String(id)`); never widen the domain to fit the library."*
+- *"Seed client state from server data **once** (guard `order.length === 0`); render by **projecting**
+  server content through the order (order drives, articles look up)."*
+
+---
+
 ## The four "performance" hooks I keep mixing up (`useMemo` / `useCallback` / `useDeferredValue` / `useTransition`)
 
 **Two families.** Don't lump them — they solve different pains:
@@ -922,6 +1056,11 @@ proven hotspot, then stop.**
 | A parent + related children that must **share state**, and I want the **consumer to control layout** | **compound component** (context + `Parent.Child = Child`) | Implicit state sharing via context; JSX reads like the UI tree; inverts layout control to the consumer |
 | A **sub-component is meaningless without its parent** (used outside its provider) | **context default `null` + `throw` in the consumer** | Loud failure over silent no-op; the throw also narrows `Value \| null` → `Value` for TS |
 | A value is **one option from a fixed set** | **`type` union alias** (NOT `interface`) | `interface` can only be an object shape → forces a junk wrapper; unions need `type` |
+| A **reorderable list** where item state/identity must survive moves | **stable unique key** (uuid), **never index** | Index keys glue state to the *slot*; stable keys make React *move* the instance with the item |
+| Need to **initialize client state from async server data** (a custom order, a draft) | **effect that seeds *once*, guarded** (`state.length === 0`) | Server data arrives late; seed on arrival, and the guard stops a refetch from clobbering user edits |
+| Client owns an **order/arrangement over server data** | **project: client sequence drives, server data is the lookup** (`order.map(id => data.find(...))`) | Keep the two separate; join at render. Storing merged copies = stale duplication |
+| A **library's type is leaking** into my domain (`UniqueIdentifier`, etc.) | **coerce once at the boundary** (`String(id)`), keep the core clean | Anti-corruption: don't widen the whole domain to fit a foreign type that has cases I never hit |
+| Two object interfaces I need as **one combined type** | **`interface X extends A, B {}`** (or `A & B`) | `extends` for plain object shapes (cleaner errors); `&` when parts aren't interfaces |
 
 ---
 

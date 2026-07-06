@@ -1,21 +1,43 @@
 "use client";
 
-import { ReactNode, createContext } from "react";
-import { UseArticlesReturn } from "@/app/types/Article";
+import { ReactNode, createContext, useEffect, useReducer } from "react";
+import {
+  ArticleDispatch,
+  ArticleContextValue,
+  UseArticlesReturn,
+} from "@/app/types/Article";
 import { useFetchArticles } from "@/app/hooks/useArticles";
+import { articleReducer } from "@/app/reducers/articleReducer";
 
-export const ArticleContext = createContext<UseArticlesReturn>({
+export const defaultArticleState = {
   articles: [],
   isLoading: false,
   error: null,
-});
+  order: [],
+};
+
+export const ArticleDispatchContext = createContext<ArticleDispatch>(() => {});
+export const ArticleStateContext =
+  createContext<ArticleContextValue>(defaultArticleState);
+
 export function ArticleProvider({ children }: { children: ReactNode }) {
   const { articles, isLoading, error } = useFetchArticles();
+  const [state, dispatch] = useReducer(articleReducer, defaultArticleState);
+
+  useEffect(() => {
+    if (articles.length > 0 && state.order.length === 0) {
+      dispatch({ type: "seed", order: articles.map((article) => article.id) });
+    }
+  }, [articles]);
   return (
     <>
-      <ArticleContext value={{ articles, isLoading, error }}>
-        {children}
-      </ArticleContext>
+      <ArticleDispatchContext.Provider value={dispatch}>
+        <ArticleStateContext.Provider
+          value={{ articles, isLoading, error, order: state.order }}
+        >
+          {children}
+        </ArticleStateContext.Provider>
+      </ArticleDispatchContext.Provider>
     </>
   );
 }

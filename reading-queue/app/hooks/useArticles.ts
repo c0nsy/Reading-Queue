@@ -1,10 +1,10 @@
 import { useState, useEffect, useContext, useDeferredValue } from "react";
 import { Article, UseArticlesReturn } from "../types/Article";
-import { ArticleContext } from "../components/providers/ArticleProvider";
+import { ArticleStateContext } from "../components/providers/ArticleProvider";
 import { ToolbarStateContext } from "../components/providers/ToolbarProvider";
 
 export function useArticles(): UseArticlesReturn {
-  const { articles, isLoading, error } = useContext(ArticleContext);
+  const { articles, isLoading, error } = useContext(ArticleStateContext);
   const toolbarState = useContext(ToolbarStateContext);
 
   const deferredSearch = useDeferredValue(toolbarState.search);

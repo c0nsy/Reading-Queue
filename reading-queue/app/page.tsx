@@ -7,9 +7,18 @@ import { Toolbar } from "./components/Toolbar";
 import { Loading } from "./components/Loading";
 import ArticleCard from "./components/ArticleCard";
 import { ErrorMessage } from "./components/ErrorMessage";
+import { Sortable } from "./components/wrappers/Sortable";
+import { useContext } from "react";
+import {
+  ArticleDispatchContext,
+  ArticleStateContext,
+} from "./components/providers/ArticleProvider";
+import { DragDropProvider } from "@dnd-kit/react";
 
 export default function Home() {
   const { articles, isLoading, error } = useArticles();
+  const dispatch = useContext(ArticleDispatchContext);
+  const { order } = useContext(ArticleStateContext);
   return (
     <>
       <main className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-12">
@@ -23,16 +32,35 @@ export default function Home() {
         <Toolbar />
         <Loading loading={isLoading} />
         <ErrorMessage error={error} />
-        <div className="flex flex-col gap-3">
-          {articles.map((article) => (
-            <ArticleCard
-              key={article.id}
-              url={article.url}
-              title={article.title}
-              status={article.status}
-            />
-          ))}
-        </div>
+        <DragDropProvider
+          onDragEnd={(event) => {
+            const { source, target } = event.operation;
+            if (event.canceled || !source || !target || source.id === target.id)
+              return;
+            dispatch({
+              type: "order",
+              sourceId: String(source.id),
+              targetId: String(target.id),
+            });
+          }}
+        >
+          <div className="flex flex-col gap-3">
+            {/* loads slow cause we need to paginate  */}
+            {order
+              .slice(0, 50)
+              .map((id) => articles.find((a) => a.id === id))
+              .filter((a) => a !== undefined)
+              .map((article, index) => (
+                <Sortable key={article.id} id={article.id} index={index}>
+                  <ArticleCard
+                    url={article.url}
+                    title={article.title}
+                    status={article.status}
+                  />
+                </Sortable>
+              ))}
+          </div>
+        </DragDropProvider>
       </main>
     </>
   );
