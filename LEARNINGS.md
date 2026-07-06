@@ -997,6 +997,132 @@ task; capped the rendered count for now and flagged it as a known limitation.
 
 ---
 
+## Task 13 — Optimistic mark-as-read (`useOptimistic`) — the lie, the auto-rollback, three layers
+
+**Concept:** Optimistic UI shows the action as **already done** the instant you click, before the server
+confirms, and **automatically reverts** if the server rejects. `useOptimistic` manages an **ephemeral
+overlay** on top of your committed truth: while an action is pending it displays the "lie," and when the
+action finishes (resolve *or* throw) React **discards the overlay** and re-renders from the real state.
+The mock service fails ~50% on purpose — the Done-when is *seeing* a failure snap the pill back.
+
+**Three layers I kept fusing (the core lesson — same layer-fusion I hit with the mock service):**
+1. **`updateFn` — pure, synchronous** `(currentState, payload) => newStateToDisplay`. **No `await`, no
+   service call, no callback, no try/catch.** It only computes what to *show*. It's the same *species* as
+   a reducer. I wrote it as the async orchestrator (took `onMarkRead`, called `updateArticleStatus`,
+   "returned resolve/reject") — completely wrong.
+2. **The async action/handler** — calls the setter, `await`s the service, `dispatch`es the commit on
+   success / fires the banner on reject. **Must run inside a transition** (see below).
+3. **The service** (`updateArticleStatus`) — async, resolve/reject, the coin-flip mock. Knows **nothing**
+   about pills, banners, or optimism. Just talks to the "server."
+   The setter's argument is a **value**; that exact value lands in `updateFn` as its 2nd param.
+   (`addOptimistic(x)` → `updateFn(state, x)`.)
+
+**The lie & how it reconciles (gate Q1):** the UI claims "this async action already succeeded." React
+reconciles by **throwing away the overlay when the action ends** and re-rendering from the committed
+truth. The overlay only exists *during* a pending transition — `useOptimistic` isn't global state.
+
+**Auto-rollback = the ABSENCE of a commit (gate Q2, the trap).** On failure I write **nothing** to real
+state. Because the optimistic value was never committed (I only `dispatch` on success), killing the
+overlay reveals the unchanged base — **rollback for free, zero restore code.** So the `catch` block's job
+is **not** restoring the UI; it's the two things a framework *can't* automate: the **user-facing meaning**
+(error banner) and **logging/reporting** (`console.error` here, Sentry in prod). An **empty `catch {}` =
+silent failure = the exact trap the task warns about** (banner never fires).
+
+**Must run inside a transition/action.** Calling the setter from a plain `onClick` outside a transition
+→ React throws *"An optimistic state update occurred outside a transition or action."* Wrap the handler
+in **`startTransition(async () => …)`**. Order inside: **setter BEFORE the `await`** (the instant lie),
+**commit AFTER, success-only** (`await` throws on reject → jumps to `catch` → the `dispatch` below never
+runs → nothing committed → auto-revert).
+
+**Base state must be the PROJECTED committed truth, not the raw fetched value (the bug that cost me the
+most).** `useOptimistic(status, …)` where `status` = `article.status` (the **raw fetched** prop) means
+that after the transition ends, the overlay is discarded and the pill falls back to the **unchanged
+fetched** status → **a *successful* mark-as-read snaps back to `unread`.** The committed status lives in
+the **reducer's map**, but I was rendering the fetched field, never reading the map. Fix: **project** the
+committed map over the fetched status at the call site — `statusById[article.id] ?? article.status` — and
+feed *that* as the base. Exact Task 12 lesson (truth lives in client state; render *through* it), applied
+to status instead of order. Compiles fine without it; only *running* it reveals the revert-on-success.
+
+**Keyed map state — `Record<string, ArticleStatus>`, not `string`/`string[]`.** Status is a **lookup**
+("what's *this* id's status?"), not a **sequence** — so it's a **map**, not an array. (Order was a list →
+`string[]`; status is keyed → `Record`.) A bare `string` is one global status for all articles; a
+`string[]` is a list of statuses with no id attached (can't answer "which is A's?"). Two new JS tools:
+- **Computed property key** `{ [action.id]: action.status }` — brackets make the key come from a
+  *variable's value* at runtime, not the literal text `"action.id"`. (`{ id: action.id }` created a key
+  literally named `id` holding a string → "unknown/string not assignable to ArticleStatus".)
+- **Spread-then-override, last-key-wins** `{ ...state.status, [id]: status }` — spread **first** ("start
+  from what I had"), override **last** ("now change this one"). Reversed (`{ [id]: status,
+  ...state.status }`) → the spread's *old* value wins and the update silently does nothing. In an object
+  literal, **the last occurrence of a key wins.**
+
+**Where the hook lives DETERMINES the base-state shape (container/presentational).** "What's updating"
+(the card's pixels) ≠ "what holds the logic." **Per-article scope** → base = *one* status, `updateFn` is
+trivial `(_, next) => next`; **page-level** → base = the *whole map*, and one shared handler has to figure
+out *which* of 50 cards fired. Chose per-article (hook in the card). The **symptom that page-level was
+fighting me:** a param-less `onMarkRead` handed *identically* to all 50 cards — it structurally can't know
+which article. Putting the hook in the card means "this article's status" is **already the `status`
+prop** — nothing to fetch or `find()`. (Cost: the card stops being "dumb" — it now reads `dispatch` from
+context, holds the hook, calls the service. Accepted; a smart per-article wrapper is the alternative that
+keeps the card dumb.)
+
+**Reducer stays pure — never call the async service inside it.** The reducer is the *success commit* (pure
+`(state, action) => state`); the failing/async `updateArticleStatus` lives in the **action**. Calling a
+random-failing async thing inside the reducer would blow up purity *and* the rollback story (it'd mutate
+truth during the pending window — the one thing that must not happen).
+
+**Data down, events up (the error surface).** The parent owns the error **state**
+(`useState<string | null>(null)`), passes the **setter down** (`onError={setUpdateError}`), and the child
+calls it in its `catch`. I first passed the error **value** down — backwards: a child can't push data up
+by *receiving* the parent's current value; it needs a **function to call**. One `string | null` serves
+both jobs — truthy gates the banner, and the value *is* the message. It clears via `onDismiss` → set back
+to `null` (nothing resetting it = a permanent banner).
+
+**The mock service is the swappable data-access seam.** `updateArticleStatus` lives in **`services/`**
+(the *data-access layer* / repository — functions that talk to a backend), **not `utils/`** (utils = pure,
+no server). Body = `setTimeout` + `Math.random()` reject to force failures. Keeping the signature
+`(id, status) => Promise` means **Firebase swaps in later with nothing above it changing** — the same
+anti-corruption boundary as Task 12's `String(id)`.
+
+**Mistakes (pattern: layer-fusion + wrong data shape + reversed data flow):**
+- **`import next from "next"`** — autocomplete imported the *Next.js package* as `next` because my
+  target-status variable was undefined and the editor "helpfully" resolved the name. Delete it; define the
+  real `next` (fixed `"read"`, or derived from current for a cycle).
+- **`updateFn` written as the async orchestrator** — it's a pure sync reducer; the await/commit/banner all
+  belong to the *action*, not `updateFn`.
+- **`useState("h")` / `useState(false)` captured as one variable** — `useState` returns a **tuple**
+  `[value, setter]`; must destructure `const [x, setX] = useState(...)`. (Kept re-making this.)
+- **Passed the error VALUE down** instead of the setter (data-down / events-up inverted).
+- **`status: string` then `status: string[]`** for a per-id map — both wrong; a keyed lookup is `Record`.
+- **Reducer `{ [action.id]: action.status }` without `...state.status`** → wiped every other article's
+  status; and once spread was added, putting it **after** the computed key let the old value win.
+- **Base state = raw `article.status`** (no projection) → success reverted to `unread`.
+- **Tried to widen the `status` prop to the whole map** ("Record not assignable to ArticleStatus") — no:
+  the card correctly wants *one* status; **project to a single value at the call site**, don't corrupt the
+  card's domain.
+- **Empty `catch {}`** → silent failure, banner never fires (the named trap).
+- **`ArticleState` missing the new `status` field** → `defaultArticleState` / provider value incomplete;
+  and a **stale `"reading"` literal in `Toolbar`** after renaming the union to `"read"`.
+
+**How to remember:**
+- *"Optimistic UI tells a lie ('already succeeded'); React reconciles by discarding the overlay on
+  resolution and re-rendering from truth. The overlay only lives inside a transition."*
+- *"Rollback is the ABSENCE of a commit — never write real state early, so there's nothing to undo. The
+  `catch` owns the banner + log, not restoration. Empty catch = the trap."*
+- *"Three layers: pure `updateFn` (display) / async action (setter → await → commit-or-banner) / the
+  service (resolve/reject). Never fuse them. Setter before await, commit after (success only)."*
+- *"Base state must be the PROJECTED committed truth (`map[id] ?? fetched`), or a *successful* update
+  snaps back. Compiles without it; only running reveals it."*
+- *"Per-id value = `Record` map (computed key `{[id]:v}`, spread-then-override, last wins). A list is for
+  a sequence (order); a map is for a lookup (status)."*
+- *"Where the hook lives sets the base-state shape: per-article → base is the `status` prop, `updateFn` is
+  `(_, next) => next`. A param-less handler cloned to every card = page-level fighting me."*
+- *"Data down, events up: parent owns the error state, passes the SETTER down, child calls it in `catch`.
+  Passing the value down is backwards."*
+- *"Writes go in `services/` (data-access), never `utils/`; keep `(args) => Promise` so the real backend
+  swaps in underneath."*
+
+---
+
 ## The four "performance" hooks I keep mixing up (`useMemo` / `useCallback` / `useDeferredValue` / `useTransition`)
 
 **Two families.** Don't lump them — they solve different pains:
@@ -1061,6 +1187,10 @@ proven hotspot, then stop.**
 | Client owns an **order/arrangement over server data** | **project: client sequence drives, server data is the lookup** (`order.map(id => data.find(...))`) | Keep the two separate; join at render. Storing merged copies = stale duplication |
 | A **library's type is leaking** into my domain (`UniqueIdentifier`, etc.) | **coerce once at the boundary** (`String(id)`), keep the core clean | Anti-corruption: don't widen the whole domain to fit a foreign type that has cases I never hit |
 | Two object interfaces I need as **one combined type** | **`interface X extends A, B {}`** (or `A & B`) | `extends` for plain object shapes (cleaner errors); `&` when parts aren't interfaces |
+| Show an action as **done before the server confirms**, and auto-revert if it fails | **`useOptimistic` + `startTransition`** | Ephemeral overlay on the committed truth; the **absence** of a success-commit IS the rollback (no restore code). Base state must be the *projected* truth or success snaps back |
+| A **per-item lookup** ("what's *this* id's value?") | **`Record<string, V>` map** (computed key `{[id]:v}`, spread-then-override) | A map answers "value for this key"; an array is for a *sequence* (order), not a keyed lookup |
+| A child needs to **report an event/error UP** to a parent | **parent owns the state, pass the SETTER down, child calls it** | Data flows down, events flow up — a child can't push by *receiving* the parent's value; it needs a function to call |
+| A function that **talks to a backend** (mock or real write) | **a `services/` data-access layer** (not `utils/`) with a stable `(args) => Promise` signature | Utils are pure; server calls aren't. Stable signature = swap the mock for Firebase with nothing above it changing (anti-corruption) |
 
 ---
 

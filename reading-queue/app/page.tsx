@@ -8,20 +8,30 @@ import { Loading } from "./components/Loading";
 import ArticleCard from "./components/ArticleCard";
 import { ErrorMessage } from "./components/ErrorMessage";
 import { Sortable } from "./components/wrappers/Sortable";
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import {
   ArticleDispatchContext,
   ArticleStateContext,
 } from "./components/providers/ArticleProvider";
 import { DragDropProvider } from "@dnd-kit/react";
+import { ErrorBanner } from "./components/errors/ErrorBanner";
 
 export default function Home() {
   const { articles, isLoading, error } = useArticles();
   const dispatch = useContext(ArticleDispatchContext);
-  const { order } = useContext(ArticleStateContext);
+  const { order, status } = useContext(ArticleStateContext);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   return (
     <>
       <main className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-12">
+        {updateError && (
+          <ErrorBanner
+            message={updateError}
+            onDismiss={() => {
+              setUpdateError("");
+            }}
+          />
+        )}
         <header className="flex items-center justify-between border-b border-zinc-200 pb-4 dark:border-zinc-800">
           <h1 className="text-2xl font-semibold tracking-tight">
             Reading Queue
@@ -55,7 +65,9 @@ export default function Home() {
                   <ArticleCard
                     url={article.url}
                     title={article.title}
-                    status={article.status}
+                    status={status[article.id] ?? article.status}
+                    id={article.id}
+                    onError={setUpdateError}
                   />
                 </Sortable>
               ))}

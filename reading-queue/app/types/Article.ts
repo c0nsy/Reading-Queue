@@ -17,10 +17,11 @@ export interface UseArticlesReturn {
   error: unknown;
 }
 
-export type ArticleStatus = "unread" | "reading" | "archived";
+export type ArticleStatus = "unread" | "read" | "archived";
 
 export interface ArticleState {
   order: Order;
+  status: Record<string, ArticleStatus>;
 }
 
 export interface ArticleOrder {
@@ -29,9 +30,15 @@ export interface ArticleOrder {
   targetId: string;
 }
 
+export interface ArticleUpdateStatus {
+  type: "status";
+  id: string;
+  status: ArticleStatus;
+}
+
 export interface ArticleContextValue extends ArticleState, UseArticlesReturn {}
 
-export type ArticleAction = ArticleOrder | ArticleSeed;
+export type ArticleAction = ArticleOrder | ArticleSeed | ArticleUpdateStatus;
 
 export type ArticleDispatch = Dispatch<ArticleAction>;
 
