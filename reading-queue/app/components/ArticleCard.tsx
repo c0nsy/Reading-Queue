@@ -1,19 +1,42 @@
-import { memo } from "react";
+import { memo, startTransition, useOptimistic } from "react";
 import { ArticleStatus } from "../types/Article";
-
+import { updateArticleStatus } from "../services/updateArticleStatus";
+import { useContext } from "react";
+import { ArticleDispatchContext } from "./providers/ArticleProvider";
 type ArticleCardProps = {
   url: string;
   title: string;
   status: ArticleStatus;
+  id: string;
+  onError: (message: string) => void;
 };
 
 const statusStyles: Record<ArticleStatus, string> = {
   unread: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  reading: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  read: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
   archived: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
-function ArticleCard({ url, title, status }: ArticleCardProps) {
+function ArticleCard({ url, title, status, id, onError }: ArticleCardProps) {
+  const [optimisticStatus, setOptimisticStatus] = useOptimistic(
+    status,
+    (currentStatus, newStatus: ArticleStatus) => newStatus,
+  );
+  const dispatch = useContext(ArticleDispatchContext);
+
+  function handleUpdateStatus(id: string, status: ArticleStatus) {
+    const next = "read";
+    startTransition(async () => {
+      setOptimisticStatus(next);
+      try {
+        await updateArticleStatus(id, next);
+        dispatch({ type: "status", id, status: next });
+      } catch (err) {
+        onError("Couldn't update status");
+        console.error(err);
+      }
+    });
+  }
   return (
     <article className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-white p-4 transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700">
       <svg
@@ -34,11 +57,12 @@ function ArticleCard({ url, title, status }: ArticleCardProps) {
           <h2 className="font-medium leading-snug text-zinc-900 dark:text-zinc-100">
             {title}
           </h2>
-          <span
-            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${statusStyles[status]}`}
+          <button
+            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${statusStyles[optimisticStatus]}`}
+            onClick={() => handleUpdateStatus(id, status)}
           >
-            {status}
-          </span>
+            {optimisticStatus}
+          </button>
         </div>
         <a
           href={url}

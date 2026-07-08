@@ -22,6 +22,11 @@ export function articleReducer(
 
     case "seed":
       return { ...state, order: action.order };
+    case "status":
+      return {
+        ...state,
+        status: { ...state.status, [action.id]: action.status },
+      };
     default:
       assertUnreachable(action);
   }

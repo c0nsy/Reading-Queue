@@ -14,6 +14,7 @@ export const defaultArticleState = {
   isLoading: false,
   error: null,
   order: [],
+  status: {},
 };
 
 export const ArticleDispatchContext = createContext<ArticleDispatch>(() => {});
@@ -33,7 +34,13 @@ export function ArticleProvider({ children }: { children: ReactNode }) {
     <>
       <ArticleDispatchContext.Provider value={dispatch}>
         <ArticleStateContext.Provider
-          value={{ articles, isLoading, error, order: state.order }}
+          value={{
+            articles,
+            isLoading,
+            error,
+            order: state.order,
+            status: state.status,
+          }}
         >
           {children}
         </ArticleStateContext.Provider>

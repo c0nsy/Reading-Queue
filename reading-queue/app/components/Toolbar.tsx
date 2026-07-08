@@ -16,7 +16,7 @@ export function Toolbar() {
     dispatch({ type: "sort", sortBy: "status" });
   }
   function handleStatus() {
-    dispatch({ type: "status", status: "reading" });
+    dispatch({ type: "status", status: "read" });
   }
   const btn =
     "rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:hover:text-white";
