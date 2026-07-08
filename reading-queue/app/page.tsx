@@ -8,37 +8,58 @@ import { Loading } from "./components/Loading";
 import ArticleCard from "./components/ArticleCard";
 import { ErrorMessage } from "./components/ErrorMessage";
 import { Sortable } from "./components/wrappers/Sortable";
-import { useContext, useState } from "react";
+import { useContext, useState, useActionState } from "react";
 import {
   ArticleDispatchContext,
   ArticleStateContext,
 } from "./components/providers/ArticleProvider";
 import { DragDropProvider } from "@dnd-kit/react";
-import { ErrorBanner } from "./components/errors/ErrorBanner";
+import { Banner } from "./components/Banner";
+import { ArticleForm } from "./components/ArticleForm";
+import { BannerType } from "./types/Banner";
+import { createArticle } from "./services/createArticle";
 
 export default function Home() {
   const { articles, isLoading, error } = useArticles();
   const dispatch = useContext(ArticleDispatchContext);
   const { order, status } = useContext(ArticleStateContext);
-  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [banner, setBanner] = useState<BannerType | null>(null);
+  async function handleFormSubmit(prevState: void, formData: FormData) {
+    const articleUrl = (formData.get("url") ?? "").toString();
+    try {
+      const result = await createArticle(articleUrl);
+
+      setBanner({ variant: "success", message: result });
+    } catch (err) {
+      setBanner({ variant: "error", message: String(err) });
+    }
+  }
+
+  const [state, formAction, isPending] = useActionState(
+    handleFormSubmit,
+    undefined,
+  );
+
   return (
     <>
       <main className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-12">
-        {updateError && (
-          <ErrorBanner
-            message={updateError}
+        {banner && (
+          <Banner
+            message={banner.message}
             onDismiss={() => {
-              setUpdateError("");
+              setBanner(null);
             }}
+            variant={banner.variant}
           />
         )}
         <header className="flex items-center justify-between border-b border-zinc-200 pb-4 dark:border-zinc-800">
           <h1 className="text-2xl font-semibold tracking-tight">
             Reading Queue
           </h1>
-          {/* change the theme */}
+
           <ThemeButton />
         </header>
+        <ArticleForm isPending={isPending} formAction={formAction} />
         <Toolbar />
         <Loading loading={isLoading} />
         <ErrorMessage error={error} />
@@ -67,7 +88,9 @@ export default function Home() {
                     title={article.title}
                     status={status[article.id] ?? article.status}
                     id={article.id}
-                    onError={setUpdateError}
+                    onError={(message) => {
+                      setBanner({ variant: "error", message });
+                    }}
                   />
                 </Sortable>
               ))}

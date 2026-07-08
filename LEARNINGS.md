@@ -1157,6 +1157,96 @@ proven hotspot, then stop.**
 
 ---
 
+## Task 14 — Add-URL form with Actions (`useActionState` + form actions) — the three faces of state
+
+**Concept:** React 19 Actions collapse the old form dance — `onSubmit` + `e.preventDefault()` +
+`useState` for loading + `useState` for error + `try/catch` — into **one async function** whose
+**return value *becomes* the next state.** `useActionState(action, initialState)` hands back
+`[state, formAction, isPending]`: `state` is the last thing the action returned, `formAction` is the
+dispatcher you attach to `<form action={formAction}>`, `isPending` is the framework's loading flag.
+**Never hand-roll a status boolean next to it** — that's the task's named trap.
+
+**The three faces of state (the invariant I broke twice):** `initialState`, the action's `prevState`
+param, and the action's **return** must all be the **same type** (my `FormState`). The generic infers
+`State` from them; if they disagree, the overload silently fails. I hit this both directions:
+- typed `prevState: string` while `initialState` was an object → conflict.
+- **deleted the `return`** (reporting via `setBanner` instead) → action returned `void`, so TS inferred
+  `State = void`, which clashed with my `prevState: FormState` + `{success:null}` initial state:
+  *"Type 'void' is not assignable to type 'FormState'."* The fix wasn't to silence it — it was to
+  **admit** the state is now void (`prevState: void`, `initialState: undefined`), because I'd routed the
+  result around the hook. **Lesson: if you don't use the hook's `state`, make the types say so.**
+
+**Uncontrolled form + `<form action>`:** the DOM owns the input value; at submit the browser packs it
+into **`FormData`**, the action's **2nd arg**. The input's **`name`** is the FormData key — I put
+`id="url"` and `formData.get("url")` returned `null` every time (id ≠ name). And React 19 **auto-resets**
+uncontrolled fields when the action **completes without throwing** (clear-on-success = free) and
+**preserves** them when it throws (retry-friendly). `requestFormReset` *fires* a reset — it doesn't
+suppress one. So uncontrolled didn't "fight" me; it handed me both behaviors for free.
+
+**Two TS traps at the async boundary:**
+- `formData.get("url")` is **`FormDataEntryValue | null`**, not `string` — coerce before use.
+- a `catch` binding is **`unknown`**, not my rejected string — TS assumes *anything* can be thrown, so I
+  must coerce/narrow (`String(err)`) before feeding `message: string`. (And: `await` **returns** the
+  resolved value; the rejected value is the `catch` param — that's how I use the service's own strings
+  instead of hardcoding "created successfully".)
+
+**Ownership: lift state up, don't reach for context.** Page owns the one banner → I **lifted the hook to
+page**, passed `formAction` + `isPending` *down* to a now-dumb `ArticleForm`, and page reads the result.
+Context is for **prop-drilling pain / many scattered consumers**; a direct child + one setter is not that
+(same "data down, events up" as Task 13's `onError`). I flip-flopped mid-build between *callback-down* (B)
+and *lift-the-hook* (A) and produced a broken hybrid — **pick one approach and commit; half-A/half-B is
+worse than either.**
+
+**The two-sources tension (why my `state` went vestigial):** I wanted **one** banner fed by **two**
+independent sources — card status-errors (imperative `setBanner`) and the form result (declarative hook
+`state`). Funneling both into `setBanner` unifies them, but it makes `useActionState`'s `state` unused →
+hence the void action above. The alternative (use the hook as designed: return `FormState`, render from
+`state`) reopens the two-sources reconcile. No free lunch — I chose the funnel and made the types honest.
+
+**Discriminated unions earn their keep only when branches diverge.** My first `FormState` had two
+structurally identical branches (`{success:true;message}` / `{success:false;message}`) = ceremony. It got
+real once success carried an `Article` and failure a string. And **don't force one field name across
+divergent payloads** — calling an `Article` object `message` is a lie; name it `article`. Narrowing
+(`if (state.success)`) then gives me `.article` in one branch, `.error` in the other, and I can't read the
+wrong field.
+
+**Generic variant component:** the `Banner` is one component with a `variant` prop + a
+**`Record<variant, styles>`** map (same shape as `statusStyles`), and the map also drives the **a11y
+`role`** — `alert` (assertive) for errors, `status` (polite) for success. One variant component beats two
+copy-pasted twins that drift. The **string↔object boundary** (card hands up a string; banner state is a
+`{variant,message}` object) is bridged by an **inline adapter at the prop**:
+`onError={(message) => setBanner({ variant: "error", message })}`.
+
+**Meta-skill I finally practiced — finding types myself:** **hover** shows the inferred type (90% of the
+time that's the answer — I almost never *write* these); **F12/Go-to-Definition** jumps into the library's
+`.d.ts`; **extract don't retype** (`typeof`, `ReturnType<>`, `Parameters<>`, indexed access `Tuple[1]`);
+**annotate only at boundaries** (params, returns, props) and let inference do the interior. I typed
+`formAction` as `() => void` (too narrow) → *"'(payload: FormData) => void' is not assignable to
+'() => void'"*: **a function that *requires* an arg can't stand in for a zero-arg function type.** Hover
+would have shown `(payload: FormData) => void` immediately.
+
+**Smaller mistakes I actually made:** prop **name** mismatch (`handleFormSubmit={formAction}` when the
+prop key was `formAction`) → *"property does not exist"* (JSX attribute name must equal the props key);
+passed the **raw action** instead of the **dispatcher** to `<form action>`; used `formAction` in JSX but
+only destructured `isPending`; `message: "string"` in a type = a string **literal**, not the `string`
+type; `setBanner("")` where `null` = "no banner"; `Math.random() * 100` for an id → floats (needs
+`Math.floor`, and a bigger range to avoid collisions).
+
+**Gate answers (passed unaided):** (1) an action replaces `onSubmit`+`preventDefault`+`useState(loading)`
++`useState(error)`+`try/catch`; its return becomes state, its first arg is prevState. (2) **uncontrolled**
+— DOM owns the value, read from `FormData` at submit; interacts with the action via auto-reset on success.
+(3) `isPending` comes **from the hook** (3rd tuple element) — I did not create a boolean.
+
+**How to remember:**
+- **"The return IS the state."** Not a side channel — what the action returns is what `state` becomes.
+- **"Three faces must agree"** — `initialState`, `prevState`, return: one type or the overload dies.
+- **"`name` is the FormData key"** (not `id`); **auto-reset on success, preserve on throw.**
+- **"`isPending` is free"** — hand-rolling a loading boolean means I missed the point.
+- **"Hover finds the type"** — the type usually already exists upstream; I just name it downstream.
+- **Commit to one architecture** before typing; flip-flopping mid-build is how I made a broken hybrid.
+
+---
+
 ## Smells → reach-for-this (the "when do I use X" table I keep asking about)
 
 > The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
@@ -1191,6 +1281,12 @@ proven hotspot, then stop.**
 | A **per-item lookup** ("what's *this* id's value?") | **`Record<string, V>` map** (computed key `{[id]:v}`, spread-then-override) | A map answers "value for this key"; an array is for a *sequence* (order), not a keyed lookup |
 | A child needs to **report an event/error UP** to a parent | **parent owns the state, pass the SETTER down, child calls it** | Data flows down, events flow up — a child can't push by *receiving* the parent's value; it needs a function to call |
 | A function that **talks to a backend** (mock or real write) | **a `services/` data-access layer** (not `utils/`) with a stable `(args) => Promise` signature | Utils are pure; server calls aren't. Stable signature = swap the mock for Firebase with nothing above it changing (anti-corruption) |
+| A **form submit** that needs pending + error + a result, without hand-rolling booleans | **`useActionState` + `<form action={dispatch}>`** | The action's **return becomes state**; `isPending` is free (3rd tuple element). `initialState`/`prevState`/return must be **one type** |
+| An **uncontrolled** form field that must **clear on success but survive on error** | **`<form action={fn}>` + `name=` on the input** | React 19 auto-resets on success (action doesn't throw), preserves on throw — both for free. `formData.get(name)` is the source of truth |
+| A result with **two+ outcomes carrying different payloads** (success→object, error→string) | **discriminated union** (`{success:true; article} \| {success:false; error}`) | Only earns its keep when branches **diverge**; identical branches = ceremony. Narrowing gives each branch its own fields |
+| A **reusable notification** UI (success *and* error, one component) | **variant prop + `Record<variant, styles>` map** (drive the a11y `role` too) | One variant component beats copy-pasted twins that drift; `role="alert"` vs `"status"` per variant |
+| A child hands up **type A** but my state is **type B** (string → `{variant,message}`) | **adapter fn at the boundary** (`onError={(m) => setBanner({variant:"error", message:m})}`) | Translate at the seam; don't widen either side to match the other |
+| "**What type is this value?**" (a hook return, a prop) | **hover → F12 into `.d.ts` → extract (`typeof`/`ReturnType`/`Parameters`/`Tuple[1]`)** | The type usually already exists upstream; name it downstream. Annotate only at boundaries, let inference do the interior |
 
 ---
 

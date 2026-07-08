@@ -69,7 +69,7 @@ function ArticleCard({ url, title, status, id, onError }: ArticleCardProps) {
           target="_blank"
           rel="noreferrer"
           draggable={false}
-          className="mt-1 block truncate text-sm text-zinc-500 hover:text-zinc-700 hover:underline dark:text-zinc-400 dark:hover:text-zinc-200"
+          className="mt-1 block break-all text-sm text-zinc-500 hover:text-zinc-700 hover:underline dark:text-zinc-400 dark:hover:text-zinc-200"
         >
           {url}
         </a>
