@@ -9,6 +9,7 @@ type ArticleCardProps = {
   status: ArticleStatus;
   id: string;
   onError: (message: string) => void;
+  openReaderView: (id: string) => void;
 };
 
 const statusStyles: Record<ArticleStatus, string> = {
@@ -17,7 +18,14 @@ const statusStyles: Record<ArticleStatus, string> = {
   archived: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
-function ArticleCard({ url, title, status, id, onError }: ArticleCardProps) {
+function ArticleCard({
+  url,
+  title,
+  status,
+  id,
+  onError,
+  openReaderView,
+}: ArticleCardProps) {
   const [optimisticStatus, setOptimisticStatus] = useOptimistic(
     status,
     (currentStatus, newStatus: ArticleStatus) => newStatus,
@@ -73,6 +81,27 @@ function ArticleCard({ url, title, status, id, onError }: ArticleCardProps) {
         >
           {url}
         </a>
+        <button
+          onClick={() => {
+            openReaderView(id);
+          }}
+          className="mt-3 inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
+        >
+          Read
+          <svg
+            className="h-3 w-3"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth="2.5"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
+        </button>
       </div>
     </article>
   );

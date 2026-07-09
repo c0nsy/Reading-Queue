@@ -1247,6 +1247,108 @@ type; `setBanner("")` where `null` = "no banner"; `Math.random() * 100` for an i
 
 ---
 
+## Task 15 — Kill the race condition (`AbortController` + effect cleanup) — **SKIPPED (deliberate)**
+
+**What happened:** I tried to reproduce the paste-A-then-B race and *couldn't* — and the reason **was** the
+lesson. `useActionState` **serializes its actions**: dispatch the form action twice fast and React **queues**
+them, so B's action doesn't even start until A finishes. The create-on-submit path *structurally cannot race*
+— React protects me. The race Task 15 teaches lives only in a **`useEffect` / value-triggered fetch** (a fetch
+keyed to a **changing value** — search-as-you-type, a live URL preview), which my app doesn't have (the
+metadata-fetch path was never built).
+
+**The decision:** I chose to **serialize** (disable the submit while in flight) and skip the task. Legit for
+*this* path — but the caveat I carry: **serializing only works for button-gated async.** A fetch keyed to a
+*changing value* can't be disabled (freezing the input on every keystroke is unshippable); there, **abort the
+stale request** or **ignore the stale response** is the only tool.
+
+**Known gap + two things I did learn:**
+- **Never practiced `AbortController` / ignore-stale.** If a value-keyed fetch ever appears → "this is the
+  Task 15 I skipped," build it then.
+- **A constant delay can't reproduce a race.** A fixed `setTimeout(…, 3000)` shifts *every* request by the same
+  amount → start order = finish order, forever. Out-of-order arrival needs **variable** latency.
+- **Out-of-order arrival ≠ clobber.** A clobber needs both responses writing the **same shared slot**; separate
+  rows just reorder.
+
+---
+
+## Task 16 — Error boundaries + lazy reader view (`use` + `Suspense` + `React.lazy`)
+
+**Concept:** Three tools snap into one **render-time** story for a code-split view that fetches:
+- **`React.lazy(() => import('./X'))`** defers a component's *code* until first render; that first render **suspends** while the chunk loads.
+- **`<Suspense fallback>`** catches the suspend → shows the loading fallback.
+- **Error boundary** (a **class** — boundaries can't be hooks) catches **render-phase** throws in the subtree below → shows a fallback instead of white-screening.
+- **`use(promise)`** is **render-time `await`**: **suspends** while pending (→ Suspense fallback), **throws** the rejection on reject (→ error boundary), **returns** the value on resolve.
+
+So the reader = a **lazy** component that **`use`s** its content promise, wrapped in
+**`<ErrorBoundary key={id}><Suspense fallback>…</Suspense></ErrorBoundary>`**. Suspense = "still loading,"
+boundary = "it failed" — **two halves of the same subtree.**
+
+**Error boundaries — the mechanics:**
+- **Class only.** `static getDerivedStateFromError(error)` = pure `error → state`, flips `hasError`; static +
+  pure on purpose (React can't trust instance state mid-unwind). `componentDidCatch(error, info)` = the
+  side-effect method (logging; `info.componentStack`). `render()` returns `fallback` vs `children`.
+- **What they do NOT catch:** async callbacks (`setTimeout`, `.then`), **event handlers**, SSR, and errors in
+  the boundary itself. *Why:* by the time a child's render runs, the parent's function has **already returned**
+  — there's **no shared call stack** to catch across. Event handlers run in a normal JS stack I control → plain
+  `try/catch` there. **Boundaries exist for the code React calls on my behalf (render/commit).**
+
+**`use` — and the promise-identity trap (the part I delegated → my known gap):**
+- A promise handed to `use` must be **stable across the component's suspend/retry cycles.** A promise created
+  **in render — *even wrapped in `useMemo`*** — is **not** stable: when a component **suspends on its first
+  render it never commits**, so on retry its hook memory (the `useMemo` cache) is **discarded** → it mints a
+  **fresh** promise → suspends again → **infinite loop** (no console warning in React 19). Same "new reference
+  every render" family as Task 4/12 — a promise is a reference too.
+- **Fix:** create/cache the promise **outside render** — a **module-level `Map<id, Promise>`**
+  (`getArticleContent(id)` → return cached or create+store). Every retry then gets the *same* promise; once it
+  settles, the retry renders. This is literally **what a data library caches internally** (Task 7's "still
+  owed"). *I had Claude implement this one — revisit the WHY when it resurfaces.*
+
+**The other traps I hit:**
+- **`lazy` must live at MODULE scope**, not inside the component — inside render it returns a **new lazy
+  component every render** → constant remount/refetch (identity trap again). And `lazy(() => import('./X'))`
+  needs the module's **default export** (named export → *"Property 'default' is missing"*).
+- **`key` RESETS a class boundary.** Same key = same instance → `hasError` **sticks** (after one bad article,
+  good ones still show the error). Different key → **remount** → `hasError` back to `false`. `key={articleId}`
+  gives each opened article a fresh boundary. (Task 12 key semantics, new job: **state reset**, not list identity.)
+- **Don't render a Promise.** `const data = fetchArticleContent(id)` is a **Promise, not a string** —
+  `<p>{data}</p>` shows nothing. A promise is an **IOU I unwrap** (`use`/`await`), not an object I
+  **destructure**. (I kept asking "how do I destructure it" — wrong verb.)
+- **Reproduce on demand > random.** The mock first failed on `Math.random() > 0.5` — can't demo a bug I can't
+  summon (the exact Task-15 lesson). Fixed to a **deterministic sentinel**: `id === "1"` always rejects.
+- **A Suspense fallback must be visible.** `<Suspense fallback={<Loading />}>` where `Loading` returns `null`
+  unless `loading` is truthy → an **invisible** fallback. `<Loading loading />` is **correct** — a fallback
+  only exists *while* loading, so hardcoding `true` there is right, not a hack.
+- **One reader, on demand — not one per row.** I first rendered a `<ReaderView>` for **every** article in the
+  `.map` → 50 full-screen panes + 50 fetches on page load. The reader is a **secondary screen**: a single view,
+  **conditionally rendered** on a `selectedId` state (`useState("")`, gate `!== ""`), opened by a **Read button**
+  (events-up: `openReaderView(id)` → `setArticleId`), closed by `onClose={() => setArticleId("")}`.
+- **Placement (the task Trap):** wrap the **smallest** subtree (just the reader), not the app root — so a bad
+  article kills only the reader, queue stays alive.
+- **Empty boundary fallback** → blank on error. Give it a real `fallback` so a caught error is *visible*.
+- **Code-split evidence = the JS chunk**, not a data request. Network tab shows a `source: "dynamic"` chunk on
+  first open; the content mock is **in-memory**, so there is **no** fetch/XHR to hunt for.
+
+**Recurring mistake pattern:** under uncertainty I **reach for the heavy tool** — Context and
+`useActionState`-state to "get the content," when the reader has **one** consumer and the fetch has nothing to
+do with the form's action state. Simplest-thing-first: the reader owns its own `use` locally; context/lifting
+were solving a problem the *cache* solves.
+
+**Honest ledger:** I skipped Task 15 (never practiced `AbortController`/ignore-stale) and **delegated** the
+Task-16 promise cache (the suspend-before-commit footgun). Both are known gaps, logged on purpose — the
+concepts I *did* earn here (class boundary, `use`, lazy at module scope, `key`-reset, Suspense) I wrote myself.
+
+**How to remember:**
+- *"Suspense = still loading; error boundary = it failed. Two halves of one subtree."*
+- *"Boundaries catch what React calls on my behalf (render/commit). Async & event-handler throws are mine to `try/catch`."*
+- *"`use` = `await` for render. It needs a Suspense parent AND an error boundary to be useful."*
+- *"A promise for `use` lives OUTSIDE render (module cache). In-render (even memoized) dies on suspend-before-commit → infinite loop."* **(delegated — my gap)**
+- *"`lazy` at module scope, default export. Inside render = new component every render."*
+- *"Change the `key` to RESET a boundary. Same key = errored forever."*
+- *"A promise is an IOU I unwrap, not an object I destructure."*
+- *"Deterministic sentinel (`id==='1'`) beats `Math.random` — can't demo a bug I can't summon."*
+
+---
+
 ## Smells → reach-for-this (the "when do I use X" table I keep asking about)
 
 > The meta-skill: **learn the *pain* each tool relieves, not its API.** Start with the simplest thing
@@ -1287,6 +1389,12 @@ type; `setBanner("")` where `null` = "no banner"; `Math.random() * 100` for an i
 | A **reusable notification** UI (success *and* error, one component) | **variant prop + `Record<variant, styles>` map** (drive the a11y `role` too) | One variant component beats copy-pasted twins that drift; `role="alert"` vs `"status"` per variant |
 | A child hands up **type A** but my state is **type B** (string → `{variant,message}`) | **adapter fn at the boundary** (`onError={(m) => setBanner({variant:"error", message:m})}`) | Translate at the seam; don't widen either side to match the other |
 | "**What type is this value?**" (a hook return, a prop) | **hover → F12 into `.d.ts` → extract (`typeof`/`ReturnType`/`Parameters`/`Tuple[1]`)** | The type usually already exists upstream; name it downstream. Annotate only at boundaries, let inference do the interior |
+| A **render error** must not white-screen the whole app | **error boundary** (a **class**), placed around the **smallest** failing subtree | Catches render/commit throws below it; narrow placement keeps failures local. Does NOT catch async/event-handler throws (no shared call stack) |
+| An **async result must appear DURING render** (so a boundary can catch a bad one / Suspense can show loading) | **`use(promise)`** under a `<Suspense>` + error boundary | Render-time `await`: suspends while pending, throws on reject. The two wrappers are its loading/error halves |
+| A promise for `use` is **recreated every render** / the view **suspends forever** | **create + cache the promise OUTSIDE render** (module-level `Map` by key) | A component that suspends before commit discards its in-render `useMemo` → new promise each retry. It's what a data library caches internally |
+| **Code-split** a heavy view so its JS isn't in the initial bundle | **`lazy(() => import('./X'))` at MODULE scope** (needs a **default** export) + `<Suspense fallback>` | Deferred until first render; module scope keeps the lazy component's identity stable (inside render = new one each render) |
+| **Reset** a class error boundary so the user can retry / switch items | **change its `key`** (`key={selectedId}`) | Boundaries don't self-reset; a new key remounts a fresh instance (`hasError` back to false) |
+| **Reproduce a failure on demand** to test the error path | **a deterministic sentinel input** (`id === "1"` rejects), not `Math.random()` | Can't fix or demonstrate a bug I can't summon on command (same lesson as the Task-15 race) |
 
 ---
 
