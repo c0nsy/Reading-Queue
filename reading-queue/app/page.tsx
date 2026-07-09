@@ -8,7 +8,7 @@ import { Loading } from "./components/Loading";
 import ArticleCard from "./components/ArticleCard";
 import { ErrorMessage } from "./components/ErrorMessage";
 import { Sortable } from "./components/wrappers/Sortable";
-import { useContext, useState, useActionState } from "react";
+import { useContext, useState, useActionState, Suspense } from "react";
 import {
   ArticleDispatchContext,
   ArticleStateContext,
@@ -18,12 +18,17 @@ import { Banner } from "./components/Banner";
 import { ArticleForm } from "./components/ArticleForm";
 import { BannerType } from "./types/Banner";
 import { createArticle } from "./services/createArticle";
+import { ErrorBoundary } from "./boundaries/ErrorBoundary";
+import { lazy } from "react";
+
+const ReaderView = lazy(() => import("./components/ReaderView"));
 
 export default function Home() {
   const { articles, isLoading, error } = useArticles();
   const dispatch = useContext(ArticleDispatchContext);
   const { order, status } = useContext(ArticleStateContext);
   const [banner, setBanner] = useState<BannerType | null>(null);
+  const [articleId, setArticleId] = useState("");
   async function handleFormSubmit(prevState: void, formData: FormData) {
     const articleUrl = (formData.get("url") ?? "").toString();
     try {
@@ -63,6 +68,18 @@ export default function Home() {
         <Toolbar />
         <Loading loading={isLoading} />
         <ErrorMessage error={error} />
+        {articleId !== "" && (
+          <ErrorBoundary
+            fallback={
+              <Banner variant="error" message="Failed to render readingview " />
+            }
+            key={articleId}
+          >
+            <Suspense fallback={<Loading loading />}>
+              <ReaderView id={articleId} onClose={() => setArticleId("")} />
+            </Suspense>
+          </ErrorBoundary>
+        )}
         <DragDropProvider
           onDragEnd={(event) => {
             const { source, target } = event.operation;
@@ -90,6 +107,9 @@ export default function Home() {
                     id={article.id}
                     onError={(message) => {
                       setBanner({ variant: "error", message });
+                    }}
+                    openReaderView={(id) => {
+                      setArticleId(id);
                     }}
                   />
                 </Sortable>
